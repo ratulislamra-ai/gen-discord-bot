@@ -428,39 +428,25 @@ class SupportPanel(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.select(
-        placeholder="Choose a support category below...",
-        min_values=1,
-        max_values=1,
-        custom_id="gen_support:category_select",
-        options=[
-            discord.SelectOption(label="Tournament Registration", value="REGISTRATION", description="Questions about registering your team", emoji="🎫"),
-            discord.SelectOption(label="Tournament Help", value="TOURNAMENT_HELP", description="Schedule, rules, or tournament help", emoji="❓"),
-            discord.SelectOption(label="Technical Support", value="TECH", description="Website, API, or bot technical issues", emoji="🛠️"),
-            discord.SelectOption(label="Payment Support", value="PAYMENT", description="Entry fees or prize pool support", emoji="💳"),
-            discord.SelectOption(label="Player Report", value="PLAYER_REPORT", description="Report a player for cheating or rule violation", emoji="⚠️"),
-            discord.SelectOption(label="Team Report", value="TEAM_REPORT", description="Report a team for roster violations", emoji="🚨"),
-            discord.SelectOption(label="Dispute", value="DISPUTE", description="Dispute a match score or outcome", emoji="⚖️"),
-            discord.SelectOption(label="General Support", value="GENERAL", description="Any other questions or feedback", emoji="📩")
-        ]
-    )
-    async def select_category(self, interaction: discord.Interaction, select: discord.ui.Select):
-        choice = select.values[0]
+# ==============================================================================
+# PERSISTENT DISCORD SUPPORT PANEL
+# ==============================================================================
 
-        if choice == "REGISTRATION":
-            await interaction.response.send_message("🎫 **Tournament Registration**: Please use the `/register` command or visit `#registration` to open an official team registration ticket.", ephemeral=True)
-        elif choice == "TOURNAMENT_HELP":
-            await interaction.response.send_modal(TournamentHelpModal())
-        elif choice == "PAYMENT":
-            await interaction.response.send_modal(PaymentSupportModal())
-        elif choice == "PLAYER_REPORT":
-            await interaction.response.send_modal(PlayerReportModal())
-        elif choice == "TEAM_REPORT":
-            await interaction.response.send_modal(TeamReportModal())
-        elif choice == "DISPUTE":
-            await interaction.response.send_modal(DisputeModal())
-        else:
-            await interaction.response.send_modal(GeneralSupportModal())
+class SupportPanel(discord.ui.View):
+    """Persistent support panel view with button to open ticket menu."""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="OPEN SUPPORT TICKET", style=discord.ButtonStyle.primary, emoji="🎫", custom_id="support_open_ticket")
+    async def open_ticket_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = discord.Embed(
+            title="🎫 What do you need help with?",
+            description="Select the category below that best describes your inquiry or issue.",
+            color=discord.Color.from_rgb(0, 255, 163)
+        )
+        view = SupportCategorySelectView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 # ==============================================================================
 # DISCORD EXTENSION COG & COMMANDS
@@ -472,6 +458,20 @@ class SupportCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.command(name="setup-support-panel", description="[Admin] Post persistent GEN Esports Support Panel into channel.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_support_panel_cmd(self, interaction: discord.Interaction):
+        """Admin command to deploy persistent support panel embed."""
+        embed = discord.Embed(
+            title="━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ GEN ESPORTS SUPPORT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            description="Welcome to **GEN Esports Support**. Need help with registrations, match schedules, map vetoes, score disputes, payment/prizes, or player reports?\n\nClick the button below to contact GEN Esports Support.",
+            color=discord.Color.from_rgb(0, 255, 163)
+        )
+        embed.set_footer(text="GEN Esports Support Engine • Persistent Panel")
+        view = SupportPanel()
+        await interaction.channel.send(embed=embed, view=view)
+        await interaction.response.send_message("✅ Support Panel deployed successfully.", ephemeral=True)
+
     @app_commands.command(name="support", description="Post the persistent GEN Esports Support Panel (Staff Only).")
     async def post_support_panel(self, interaction: discord.Interaction):
         """Slash command to deploy the support center panel."""
@@ -480,19 +480,13 @@ class SupportCog(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🎧 GEN ESPORTS SUPPORT CENTER",
-            description="Welcome to the official **GEN Esports Operations & Support Portal**.\n\nNeed assistance with a tournament, dispute, player report, or registration? Choose the appropriate category below to open a private ticket with our staff.",
-            color=discord.Color.gold()
+            title="━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ GEN ESPORTS SUPPORT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            description="Welcome to **GEN Esports Support**. Need help with registrations, match schedules, map vetoes, score disputes, payment/prizes, or player reports?\n\nClick the button below to contact GEN Esports Support.",
+            color=discord.Color.from_rgb(0, 255, 163)
         )
-        embed.add_field(name="🎫 Tournament Registration", value="Registration questions & roster help", inline=True)
-        embed.add_field(name="❓ Tournament Help", value="Schedule, rules, & match info", inline=True)
-        embed.add_field(name="💳 Payment Support", value="Prize pool & entry reference", inline=True)
-        embed.add_field(name="⚠️ Player & Team Reports", value="Report rule violations or ringers", inline=True)
-        embed.add_field(name="⚖️ Match Disputes", value="Dispute match scores with evidence", inline=True)
-        embed.add_field(name="📩 General Support", value="General inquiries & feedback", inline=True)
-        embed.set_footer(text="GEN Esports Platform • Official Support Center")
-
-        await interaction.channel.send(embed=embed, view=SupportPanel())
+        embed.set_footer(text="GEN Esports Support Engine • Persistent Panel")
+        view = SupportPanel()
+        await interaction.channel.send(embed=embed, view=view)
         await interaction.response.send_message("✅ Support Panel deployed successfully.", ephemeral=True)
 
     @app_commands.command(name="my-registration", description="View your active team registrations and approval status.")

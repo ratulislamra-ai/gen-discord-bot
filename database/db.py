@@ -745,6 +745,11 @@ def _init_db_sync():
         if "discord_channel_id" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN discord_channel_id TEXT;")
 
+        cursor.execute("PRAGMA table_info(support_tickets);")
+        st_cols = [col[1] for col in cursor.fetchall()]
+        if "related_match_id" not in st_cols:
+            cursor.execute("ALTER TABLE support_tickets ADD COLUMN related_match_id INTEGER;")
+
         # Seed initial tournaments if empty or purge legacy seeds
         cursor.execute("DELETE FROM tournaments WHERE slug = 'gen-lol-cup' OR LOWER(game_type) LIKE '%league%' OR LOWER(title) LIKE '%league%';")
         cursor.execute("UPDATE tickets SET tournament_name = 'GEN PUBG Mobile Championship' WHERE tournament_name LIKE '%League%';")
