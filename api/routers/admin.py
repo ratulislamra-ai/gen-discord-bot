@@ -19,10 +19,33 @@ from database.db import (
     generate_tournament_bracket,
     update_match_result,
     set_player_verification_status,
-    set_team_verification_status
+    set_team_verification_status,
+    update_match_schedule_and_lobby
 )
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Dashboard Endpoints"], dependencies=[Depends(verify_api_key)])
+
+@router.post("/matches/{match_id}/schedule", summary="Schedule Match & Set Lobby Info")
+async def schedule_match_api(match_id: int, payload: Dict[str, Any]):
+    """Schedule match date/time, check-in window, and set lobby name/code/password."""
+    scheduled_at = payload.get("scheduled_at")
+    check_in_open = payload.get("check_in_open")
+    check_in_deadline = payload.get("check_in_deadline")
+    lobby_name = payload.get("lobby_name")
+    lobby_code = payload.get("lobby_code")
+    lobby_password = payload.get("lobby_password")
+    map_name = payload.get("map")
+    server_region = payload.get("server_region")
+
+    match = await update_match_schedule_and_lobby(
+        match_id, scheduled_at, check_in_open, check_in_deadline,
+        lobby_name, lobby_code, lobby_password, map_name, server_region
+    )
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Match ID {match_id} not found.")
+
+    await log_admin_action("API_ADMIN", "SCHEDULE_MATCH", details=f"Scheduled Match #{match_id}")
+    return {"message": "Match scheduled and lobby details updated successfully.", "match": match}
 
 @router.post("/players/{player_id}/verify", summary="Verify or Suspend Player")
 async def verify_player_api(player_id: int, payload: Dict[str, Any]):

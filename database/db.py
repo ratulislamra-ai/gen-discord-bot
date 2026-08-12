@@ -468,6 +468,48 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE matches ADD COLUMN lobby_info TEXT;")
         if "match_code" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN match_code TEXT;")
+        if "public_match_id" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN public_match_id TEXT;")
+        if "bracket_id" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN bracket_id INTEGER;")
+        if "match_number" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN match_number INTEGER;")
+        if "check_in_open_at" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN check_in_open_at TIMESTAMP;")
+        if "check_in_deadline" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN check_in_deadline TIMESTAMP;")
+        if "team_a_checked_in" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN team_a_checked_in INTEGER DEFAULT 0;")
+        if "team_b_checked_in" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN team_b_checked_in INTEGER DEFAULT 0;")
+        if "lobby_name" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN lobby_name TEXT;")
+        if "lobby_code" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN lobby_code TEXT;")
+        if "lobby_password" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN lobby_password TEXT;")
+        if "map" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN map TEXT;")
+        if "server_region" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN server_region TEXT DEFAULT 'South Asia';")
+        if "score_a" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN score_a INTEGER DEFAULT 0;")
+        if "score_b" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN score_b INTEGER DEFAULT 0;")
+        if "result_submitted_by" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN result_submitted_by TEXT;")
+        if "result_submitted_at" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN result_submitted_at TIMESTAMP;")
+        if "opponent_confirmation_status" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN opponent_confirmation_status TEXT DEFAULT 'PENDING';")
+        if "admin_verification_status" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN admin_verification_status TEXT DEFAULT 'PENDING';")
+        if "evidence_url" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN evidence_url TEXT;")
+        if "case_id" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN case_id TEXT;")
+        if "completed_at" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN completed_at TIMESTAMP;")
 
         # Seed initial tournaments if empty or purge legacy seeds
         cursor.execute("DELETE FROM tournaments WHERE slug = 'gen-lol-cup' OR LOWER(game_type) LIKE '%league%' OR LOWER(title) LIKE '%league%';")
@@ -1329,9 +1371,10 @@ def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int,
 
         cursor.execute("""
             UPDATE matches 
-            SET team1_score = ?, team2_score = ?, winner_id = ?, status = ?
+            SET team1_score = ?, team2_score = ?, score_a = ?, score_b = ?, winner_id = ?, status = ?,
+                admin_verification_status = 'APPROVED', completed_at = CURRENT_TIMESTAMP
             WHERE match_id = ?;
-        """, (team1_score, team2_score, winner_id, status, match_id))
+        """, (team1_score, team2_score, team1_score, team2_score, winner_id, status, match_id))
 
         # Check bracket progression
         cursor.execute("SELECT * FROM brackets WHERE match_id = ?;", (match_id,))
@@ -2033,3 +2076,172 @@ def _set_team_verification_status_sync(team_id: int, status: str) -> bool:
 async def set_team_verification_status(team_id: int, status: str) -> bool:
     """Asynchronously update team verification status."""
     return await asyncio.to_thread(_set_team_verification_status_sync, team_id, status)
+
+# ==============================================================================
+# MATCH LIFECYCLE & CHECK-IN FUNCTIONS
+# ==============================================================================
+
+def _generate_next_public_match_id_sync() -> str:
+    """Generate next collision-free public match ID in format GEN-M-XXXXXX."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM matches WHERE public_match_id IS NOT NULL;")
+        count = cursor.fetchone()[0] + 1
+        public_id = f"GEN-M-{count:06d}"
+        while True:
+            cursor.execute("SELECT COUNT(*) FROM matches WHERE public_match_id = ?;", (public_id,))
+            if cursor.fetchone()[0] == 0:
+                break
+            count += 1
+            public_id = f"GEN-M-{count:06d}"
+        return public_id
+
+async def generate_next_public_match_id() -> str:
+    """Asynchronously generate next public match ID."""
+    return await asyncio.to_thread(_generate_next_public_match_id_sync)
+
+def _update_match_schedule_and_lobby_sync(match_id: int, scheduled_at: str | None = None, check_in_open: str | None = None, check_in_deadline: str | None = None, lobby_name: str | None = None, lobby_code: str | None = None, lobby_password: str | None = None, map_name: str | None = None, server_region: str | None = None) -> dict | None:
+    """Schedule match & set lobby credentials safely."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ? OR public_match_id = ?;", (match_id, str(match_id)))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return None
+
+        match = dict(m_row)
+        m_id = match["match_id"]
+
+        if not match.get("public_match_id"):
+            pm_id = _generate_next_public_match_id_sync()
+        else:
+            pm_id = match["public_match_id"]
+
+        cursor.execute("""
+            UPDATE matches 
+            SET public_match_id = ?,
+                scheduled_time = COALESCE(?, scheduled_time),
+                check_in_open_at = COALESCE(?, check_in_open_at),
+                check_in_deadline = COALESCE(?, check_in_deadline),
+                lobby_name = COALESCE(?, lobby_name),
+                lobby_code = COALESCE(?, lobby_code),
+                lobby_password = COALESCE(?, lobby_password),
+                map = COALESCE(?, map),
+                server_region = COALESCE(?, server_region),
+                status = CASE WHEN status = 'SCHEDULED' AND ? IS NOT NULL THEN 'CHECK_IN_OPEN' ELSE status END
+            WHERE match_id = ?;
+        """, (pm_id, scheduled_at, check_in_open, check_in_deadline, lobby_name, lobby_code, lobby_password, map_name, server_region, check_in_open, m_id))
+
+        conn.commit()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (m_id,))
+        return dict(cursor.fetchone())
+
+async def update_match_schedule_and_lobby(match_id: int, scheduled_at: str | None = None, check_in_open: str | None = None, check_in_deadline: str | None = None, lobby_name: str | None = None, lobby_code: str | None = None, lobby_password: str | None = None, map_name: str | None = None, server_region: str | None = None) -> dict | None:
+    """Asynchronously update match schedule and lobby details."""
+    return await asyncio.to_thread(_update_match_schedule_and_lobby_sync, match_id, scheduled_at, check_in_open, check_in_deadline, lobby_name, lobby_code, lobby_password, map_name, server_region)
+
+def _process_match_check_in_sync(match_id: int, team_id: int) -> dict | None:
+    """Process check-in for a team. Sets status to READY when both check in."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ? OR public_match_id = ?;", (match_id, str(match_id)))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return None
+
+        match = dict(m_row)
+        m_id = match["match_id"]
+
+        team_a_id = match.get("team1_id")
+        team_b_id = match.get("team2_id")
+
+        if int(team_id) == team_a_id:
+            cursor.execute("UPDATE matches SET team_a_checked_in = 1 WHERE match_id = ?;", (m_id,))
+        elif int(team_id) == team_b_id:
+            cursor.execute("UPDATE matches SET team_b_checked_in = 1 WHERE match_id = ?;", (m_id,))
+        else:
+            return None
+
+        cursor.execute("SELECT team_a_checked_in, team_b_checked_in FROM matches WHERE match_id = ?;", (m_id,))
+        r = cursor.fetchone()
+        if r and r[0] == 1 and r[1] == 1:
+            cursor.execute("UPDATE matches SET status = 'READY' WHERE match_id = ?;", (m_id,))
+
+        conn.commit()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (m_id,))
+        return dict(cursor.fetchone())
+
+async def process_match_check_in(match_id: int, team_id: int) -> dict | None:
+    """Asynchronously process team check-in."""
+    return await asyncio.to_thread(_process_match_check_in_sync, match_id, team_id)
+
+def _submit_match_score_sync(match_id: int, submitting_team_id: int, submitting_user_id: str, score_a: int, score_b: int, evidence_url: str = "") -> dict | None:
+    """Submit match result. Transitions status to OPPONENT_CONFIRMATION."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ? OR public_match_id = ?;", (match_id, str(match_id)))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return None
+
+        match = dict(m_row)
+        m_id = match["match_id"]
+
+        cursor.execute("""
+            UPDATE matches 
+            SET score_a = ?, score_b = ?, team1_score = ?, team2_score = ?,
+                result_submitted_by = ?, result_submitted_at = CURRENT_TIMESTAMP,
+                evidence_url = ?, opponent_confirmation_status = 'PENDING',
+                status = 'OPPONENT_CONFIRMATION'
+            WHERE match_id = ?;
+        """, (score_a, score_b, score_a, score_b, str(submitting_user_id), evidence_url, m_id))
+
+        conn.commit()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (m_id,))
+        return dict(cursor.fetchone())
+
+async def submit_match_score(match_id: int, submitting_team_id: int, submitting_user_id: str, score_a: int, score_b: int, evidence_url: str = "") -> dict | None:
+    """Asynchronously submit match score."""
+    return await asyncio.to_thread(_submit_match_score_sync, match_id, submitting_team_id, submitting_user_id, score_a, score_b, evidence_url)
+
+def _confirm_opponent_match_score_sync(match_id: int, confirming_user_id: str, accept: bool, dispute_reason: str = "") -> dict | None:
+    """Confirm or dispute opponent score submission."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ? OR public_match_id = ?;", (match_id, str(match_id)))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return None
+
+        match = dict(m_row)
+        m_id = match["match_id"]
+
+        if accept:
+            cursor.execute("""
+                UPDATE matches 
+                SET opponent_confirmation_status = 'CONFIRMED', status = 'ADMIN_REVIEW'
+                WHERE match_id = ?;
+            """, (m_id,))
+        else:
+            cursor.execute("SELECT COUNT(*) FROM support_tickets;")
+            c_cnt = cursor.fetchone()[0] + 1
+            case_id = f"GEN-CASE-{c_cnt:06d}"
+
+            cursor.execute("""
+                INSERT INTO support_tickets (case_id, ticket_type, user_id, guild_id, channel_id, related_tournament_id, status, priority)
+                VALUES (?, 'DISPUTE', ?, '0', '0', ?, 'OPEN', 'HIGH');
+            """, (case_id, str(confirming_user_id), match["tournament_id"]))
+
+            cursor.execute("""
+                UPDATE matches 
+                SET opponent_confirmation_status = 'DISPUTED', status = 'DISPUTED', case_id = ?
+                WHERE match_id = ?;
+            """, (case_id, m_id))
+
+        conn.commit()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (m_id,))
+        return dict(cursor.fetchone())
+
+async def confirm_opponent_match_score(match_id: int, confirming_user_id: str, accept: bool, dispute_reason: str = "") -> dict | None:
+    """Asynchronously confirm or dispute match score."""
+    return await asyncio.to_thread(_confirm_opponent_match_score_sync, match_id, confirming_user_id, accept, dispute_reason)

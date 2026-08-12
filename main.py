@@ -19,6 +19,7 @@ from cogs.registration import (
     CloseTicketView
 )
 from cogs.support import SupportPanel, SupportTicketControlView
+from cogs.matches import MatchControlView
 from api.server import run_api_server_async
 
 # Configure logging for terminal output
@@ -64,11 +65,12 @@ class GENBot(commands.Bot):
         self.add_view(CloseTicketView())
         self.add_view(SupportPanel())
         self.add_view(SupportTicketControlView())
-        logger.info("Registered persistent UI views including SupportPanel and SupportTicketControlView.")
+        self.add_view(MatchControlView())
+        logger.info("Registered persistent UI views including SupportPanel, SupportTicketControlView, and MatchControlView.")
 
         # 3. Load extension cogs
         logger.info("Loading bot extensions (cogs)...")
-        cogs = ["cogs.general", "cogs.registration", "cogs.support", "cogs.identity"]
+        cogs = ["cogs.general", "cogs.registration", "cogs.support", "cogs.identity", "cogs.matches"]
         for cog in cogs:
             try:
                 await self.load_extension(cog)

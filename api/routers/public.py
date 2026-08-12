@@ -15,10 +15,51 @@ from database.db import (
     get_all_players_public,
     get_player_full_profile,
     get_all_teams_public,
-    get_team_full_profile
+    get_team_full_profile,
+    process_match_check_in,
+    submit_match_score,
+    confirm_opponent_match_score
 )
 
 router = APIRouter(prefix="/api/public", tags=["Public Website Endpoints"])
+
+@router.post("/matches/{match_id}/check-in", summary="Team Match Check-In")
+async def match_check_in_api(match_id: int, payload: Dict[str, Any]):
+    """Process team check-in for a match."""
+    team_id = payload.get("team_id")
+    if not team_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id is required.")
+    
+    match = await process_match_check_in(match_id, int(team_id))
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found or invalid team.")
+    return {"message": "Check-in recorded successfully.", "match": match}
+
+@router.post("/matches/{match_id}/submit-result", summary="Submit Match Score & Evidence")
+async def submit_match_score_api(match_id: int, payload: Dict[str, Any]):
+    """Submit match result. Transitions status to OPPONENT_CONFIRMATION."""
+    team_id = payload.get("submitting_team_id", 0)
+    user_id = payload.get("submitting_user_id", "")
+    score_a = payload.get("score_a", 0)
+    score_b = payload.get("score_b", 0)
+    evidence_url = payload.get("evidence_url", "")
+
+    match = await submit_match_score(match_id, int(team_id), str(user_id), int(score_a), int(score_b), evidence_url)
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+    return {"message": "Score submitted! Awaiting opponent confirmation.", "match": match}
+
+@router.post("/matches/{match_id}/confirm-result", summary="Opponent Confirm or Dispute Match Score")
+async def confirm_match_score_api(match_id: int, payload: Dict[str, Any]):
+    """Confirm or dispute opponent match score submission."""
+    user_id = payload.get("confirming_user_id", "")
+    accept = payload.get("accept", True)
+    dispute_reason = payload.get("dispute_reason", "")
+
+    match = await confirm_opponent_match_score(match_id, str(user_id), bool(accept), dispute_reason)
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+    return {"message": "Opponent response recorded successfully.", "match": match}
 
 @router.get("/config", response_model=Dict[str, Any], summary="Get Public App Config")
 async def get_public_config():
