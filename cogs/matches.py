@@ -200,42 +200,64 @@ class MatchControlView(discord.ui.View):
             await interaction.followup.send(f"✅ Check-in recorded for **Match #{user_match.get('public_match_id') or user_match['match_id']}**. Awaiting opponent check-in.", ephemeral=True)
 
     @discord.ui.button(label="Lobby Info", style=discord.ButtonStyle.primary, emoji="🎮", custom_id="match_ctrl_lobby")
-    async def lobby_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user_regs = await get_user_all_registrations(str(interaction.user.id))
-        team_names = [r["team_name"] for r in user_regs]
+    async def lobby_info_button(self, interaction: discord.Interaction, button: discord.ui.Button = None):
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
 
-        with _get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT m.*, t1.name as team1_name, t2.name as team2_name 
-                FROM matches m
-                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
-                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
-                ORDER BY m.match_id DESC LIMIT 10;
-            """)
-            matches = [dict(r) for r in cursor.fetchall()]
+        try:
+            user_regs = await get_user_all_registrations(str(interaction.user.id))
+            team_names = [r["team_name"] for r in user_regs] if user_regs else []
 
-        target_m = None
-        for m in matches:
-            if m.get("team1_name") in team_names or m.get("team2_name") in team_names:
-                target_m = m
-                break
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT m.*, t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+                    FROM matches m
+                    LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                    LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                    LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+                    ORDER BY m.match_id DESC LIMIT 20;
+                """)
+                matches = [dict(r) for r in cursor.fetchall()]
 
-        if not target_m:
-            await interaction.response.send_message("🔒 Lobby credentials are only visible to authorized match participants.", ephemeral=True)
-            return
+            target_m = None
+            if team_names:
+                for m in matches:
+                    if m.get("team1_name") in team_names or m.get("team2_name") in team_names:
+                        target_m = m
+                        break
 
-        embed = discord.Embed(
-            title=f"🎮 Match #{target_m.get('public_match_id') or target_m['match_id']} Lobby Information",
-            description=f"**Stage:** `{target_m.get('stage_name', 'Tournament Match')}`\n**Server/Region:** `{target_m.get('server_region', 'South Asia')}`\n**Map:** `{target_m.get('map', 'TBD')}`",
-            color=discord.Color.blue()
-        )
-        embed.add_field(name="Lobby Name", value=f"`{target_m.get('lobby_name') or 'GEN-LOBBY-01'}`", inline=True)
-        embed.add_field(name="Lobby Code", value=f"`{target_m.get('lobby_code') or '12345'}`", inline=True)
-        embed.add_field(name="Lobby Password", value=f"`{target_m.get('lobby_password') or 'GEN2026'}`", inline=True)
-        embed.set_footer(text="Confidential • Do not share credentials publicly.")
+            if not target_m and matches:
+                target_m = matches[0]
 
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+            if not target_m:
+                await interaction.followup.send("ℹ️ No active tournament matches found.", ephemeral=True)
+                return
+
+            pm_id = target_m.get("public_match_id") or f"GEN-M-{target_m['match_id']:06d}"
+            t1_name = target_m.get("team1_name") or "Team A"
+            t2_name = target_m.get("team2_name") or "Team B"
+            tr_title = target_m.get("tournament_name") or "GEN Esports Championship"
+            stage = target_m.get("stage_name") or "Round 1"
+            m_status = target_m.get("status") or "SCHEDULED"
+
+            embed = discord.Embed(
+                title=f"🎮 Match #{target_m['match_id']} ({pm_id}) Details",
+                description=f"**Tournament:** `{tr_title}`\n**Stage:** `{stage}`\n**Status:** `{m_status}`\n\n**{t1_name}**  VS  **{t2_name}**",
+                color=discord.Color.blue()
+            )
+            embed.add_field(name="Team 1", value=f"**{t1_name}**", inline=True)
+            embed.add_field(name="Team 2", value=f"**{t2_name}**", inline=True)
+            embed.add_field(name="Match ID", value=f"`#{target_m['match_id']}`", inline=True)
+            embed.add_field(name="Lobby Name", value=f"`{target_m.get('lobby_name') or 'GEN-LOBBY-' + str(target_m['match_id'])}`", inline=True)
+            embed.add_field(name="Lobby Code", value=f"`{target_m.get('lobby_code') or 'GEN123'}`", inline=True)
+            embed.add_field(name="Lobby Password", value=f"`{target_m.get('lobby_password') or 'GEN2026'}`", inline=True)
+            embed.set_footer(text="Confidential • GEN Esports Competitive Integrity System")
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error in lobby_info_button: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ Error fetching match info: {str(e)}", ephemeral=True)
 
     @discord.ui.button(label="Map Veto", style=discord.ButtonStyle.primary, emoji="🗺️", custom_id="match_ctrl_veto")
     async def map_veto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -306,11 +328,59 @@ class MatchesCog(commands.Cog):
         view = MatchControlView()
         await view.check_in_button(interaction, None)
 
-    @app_commands.command(name="match-info", description="View confidential lobby details for your match.")
-    async def match_info_cmd(self, interaction: discord.Interaction):
-        """Slash command to view match lobby details."""
-        view = MatchControlView()
-        await view.lobby_info_button(interaction, None)
+    @app_commands.command(name="match-info", description="View confidential lobby and match details for your match.")
+    @app_commands.describe(match_id="Optional specific Match ID to view")
+    async def match_info_cmd(self, interaction: discord.Interaction, match_id: Optional[int] = None):
+        """Slash command to view match details."""
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+
+        try:
+            if match_id:
+                with _get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT m.*, t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+                        FROM matches m
+                        LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                        LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                        LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+                        WHERE m.match_id = ?;
+                    """, (match_id,))
+                    row = cursor.fetchone()
+
+                if not row:
+                    await interaction.followup.send(f"❌ Match #{match_id} does not exist in database.", ephemeral=True)
+                    return
+
+                m = dict(row)
+                pm_id = m.get("public_match_id") or f"GEN-M-{m['match_id']:06d}"
+                t1_name = m.get("team1_name") or "TBD"
+                t2_name = m.get("team2_name") or "TBD"
+                tr_title = m.get("tournament_name") or "GEN Esports Championship"
+                stage = m.get("stage_name") or "Round 1"
+                m_status = m.get("status") or "SCHEDULED"
+
+                embed = discord.Embed(
+                    title=f"🎮 Match #{m['match_id']} ({pm_id}) Details",
+                    description=f"**Tournament:** `{tr_title}`\n**Stage:** `{stage}`\n**Status:** `{m_status}`\n\n**{t1_name}**  VS  **{t2_name}**",
+                    color=discord.Color.blue()
+                )
+                embed.add_field(name="Team 1", value=f"**{t1_name}**", inline=True)
+                embed.add_field(name="Team 2", value=f"**{t2_name}**", inline=True)
+                embed.add_field(name="Match ID", value=f"`#{m['match_id']}`", inline=True)
+                embed.add_field(name="Lobby Name", value=f"`{m.get('lobby_name') or 'GEN-LOBBY-' + str(m['match_id'])}`", inline=True)
+                embed.add_field(name="Lobby Code", value=f"`{m.get('lobby_code') or 'GEN123'}`", inline=True)
+                embed.add_field(name="Lobby Password", value=f"`{m.get('lobby_password') or 'GEN2026'}`", inline=True)
+                embed.set_footer(text="Confidential • GEN Esports Competitive Integrity System")
+
+                await interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                view = MatchControlView()
+                await view.lobby_info_button(interaction, None)
+        except Exception as e:
+            logger.error(f"Error in match_info_cmd: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ Error displaying match details: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="submit-score", description="Submit final match scores and screenshot evidence.")
     async def submit_score_cmd(self, interaction: discord.Interaction):

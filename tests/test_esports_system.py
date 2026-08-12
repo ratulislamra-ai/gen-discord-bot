@@ -222,5 +222,25 @@ class TestEsportsSystem(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(dict(row)["team1_id"], 101)
 
+    def test_Q_match_info_lookup(self):
+        """Scenario Q: Verify match-info query returns Match ID, Team 1, Team 2, and Tournament title."""
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.*, t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+                FROM matches m
+                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+                WHERE m.match_id = 901;
+            """)
+            m = cursor.fetchone()
+            self.assertIsNotNone(m)
+            m_dict = dict(m)
+            self.assertEqual(m_dict["match_id"], 901)
+            self.assertEqual(m_dict["team1_name"], "Team Alpha")
+            self.assertEqual(m_dict["team2_name"], "Team Beta")
+            self.assertEqual(m_dict["tournament_name"], "GEN Valorant Championship")
+
 if __name__ == "__main__":
     unittest.main()
