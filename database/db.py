@@ -392,6 +392,102 @@ def _init_db_sync():
             );
         """)
 
+        # team_seeds table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS team_seeds (
+                seed_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                seed_number INTEGER NOT NULL,
+                seeding_method TEXT DEFAULT 'RANDOM',
+                is_locked INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tournament_id, team_id)
+            );
+        """)
+
+        # team_elo table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS team_elo (
+                elo_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER UNIQUE NOT NULL,
+                rating INTEGER DEFAULT 1200,
+                matches_rated INTEGER DEFAULT 0,
+                wins INTEGER DEFAULT 0,
+                losses INTEGER DEFAULT 0,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # tournament_rulesets table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tournament_rulesets (
+                ruleset_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER UNIQUE NOT NULL,
+                game_name TEXT DEFAULT 'VALORANT',
+                best_of TEXT DEFAULT 'BO3',
+                allowed_maps TEXT DEFAULT '["Ascent","Bind","Haven","Lotus","Sunset"]',
+                veto_sequence TEXT DEFAULT '["BAN_A","BAN_B","PICK_A","PICK_B","BAN_A","BAN_B","DECIDER"]',
+                overtime_rules TEXT DEFAULT 'Overtime win by 2 maps/rounds.',
+                rules_version TEXT DEFAULT '1.0',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # veto_sessions table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS veto_sessions (
+                veto_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER UNIQUE NOT NULL,
+                current_turn_team_id INTEGER,
+                veto_state TEXT DEFAULT '{}',
+                status TEXT DEFAULT 'IN_PROGRESS',
+                started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                completed_at TIMESTAMP DEFAULT NULL
+            );
+        """)
+
+        # veto_logs table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS veto_logs (
+                veto_log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                veto_id INTEGER NOT NULL,
+                match_id INTEGER NOT NULL,
+                team_id INTEGER,
+                player_id INTEGER,
+                action TEXT NOT NULL,
+                map_name TEXT NOT NULL,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # result_corrections table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS result_corrections (
+                correction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                match_id INTEGER NOT NULL,
+                admin_id TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                old_score_a INTEGER,
+                old_score_b INTEGER,
+                new_score_a INTEGER,
+                new_score_b INTEGER,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # rules_acknowledgements table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS rules_acknowledgements (
+                acknowledgement_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                user_id TEXT NOT NULL,
+                rules_version TEXT DEFAULT '1.0',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         # Safely migrate schema: add tournament & match columns if missing
         cursor.execute("PRAGMA table_info(tournaments);")
         t_cols = [col[1] for col in cursor.fetchall()]
@@ -1274,11 +1370,22 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
                 """, (name, logo, captain))
                 team_id_map[name] = cursor.lastrowid
 
-        # Delete existing matches/brackets for fresh generation
-        cursor.execute("DELETE FROM matches WHERE tournament_id = ?;", (tournament_id,))
-        cursor.execute("DELETE FROM brackets WHERE tournament_id = ?;", (tournament_id,))
+        # Check or generate team seeds
+        cursor.execute("SELECT team_id, seed_number FROM team_seeds WHERE tournament_id = ? ORDER BY seed_number ASC;", (tournament_id,))
+        seed_rows = cursor.fetchall()
+        if not seed_rows:
+            _generate_tournament_seeds_sync(tournament_id, "RANDOM")
+            cursor.execute("SELECT team_id, seed_number FROM team_seeds WHERE tournament_id = ? ORDER BY seed_number ASC;", (tournament_id,))
+            seed_rows = cursor.fetchall()
 
-        team_ids = [team_id_map[t["team_name"]] for t in approved_teams]
+        # Lock seeds for tournament
+        cursor.execute("UPDATE team_seeds SET is_locked = 1 WHERE tournament_id = ?;", (tournament_id,))
+
+        if seed_rows:
+            team_ids = [r["team_id"] for r in seed_rows]
+        else:
+            team_ids = [team_id_map[t["team_name"]] for t in approved_teams]
+
         num_teams = len(team_ids)
 
         # Generate Round 1 matches
@@ -1403,6 +1510,12 @@ def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int,
                         cursor.execute("UPDATE matches SET team1_id = ? WHERE match_id = ?;", (winner_id, next_match_id))
                     else:
                         cursor.execute("UPDATE matches SET team2_id = ? WHERE match_id = ?;", (winner_id, next_match_id))
+
+        # Update ELO ratings idempotently
+        if winner_id:
+            loser_id = match["team2_id"] if winner_id == match["team1_id"] else match["team1_id"]
+            if loser_id:
+                _update_team_elo_after_match_sync(winner_id, loser_id)
 
         conn.commit()
         cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (match_id,))
@@ -2245,3 +2358,311 @@ def _confirm_opponent_match_score_sync(match_id: int, confirming_user_id: str, a
 async def confirm_opponent_match_score(match_id: int, confirming_user_id: str, accept: bool, dispute_reason: str = "") -> dict | None:
     """Asynchronously confirm or dispute match score."""
     return await asyncio.to_thread(_confirm_opponent_match_score_sync, match_id, confirming_user_id, accept, dispute_reason)
+
+# ==============================================================================
+# COMPETITIVE INTEGRITY, SEEDING, ELO & VETO ENGINE
+# ==============================================================================
+
+import json
+import random
+
+def _generate_tournament_seeds_sync(tournament_id: int, method: str = "RANDOM") -> list[dict]:
+    """Generate or update team seeds for a tournament."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Check if seeds are locked
+        cursor.execute("SELECT is_locked FROM team_seeds WHERE tournament_id = ? AND is_locked = 1;", (tournament_id,))
+        if cursor.fetchone():
+            cursor.execute("SELECT * FROM team_seeds WHERE tournament_id = ? ORDER BY seed_number ASC;", (tournament_id,))
+            return [dict(r) for r in cursor.fetchall()]
+
+        # Fetch tournament title/slug
+        cursor.execute("SELECT title, slug FROM tournaments WHERE tournament_id = ? OR CAST(tournament_id AS TEXT) = ?;", (tournament_id, str(tournament_id)))
+        t_row = cursor.fetchone()
+        if not t_row:
+            return []
+
+        approved_teams = _get_approved_teams_by_tournament_sync(t_row["title"])
+        if not approved_teams:
+            approved_teams = _get_approved_teams_by_tournament_sync(t_row["slug"])
+
+        teams = [r["team_name"] for r in approved_teams]
+        if not teams:
+            return []
+
+        team_id_list = []
+        for t_name in teams:
+            cursor.execute("SELECT team_id FROM teams WHERE LOWER(name) = LOWER(?);", (t_name,))
+            row = cursor.fetchone()
+            if row:
+                team_id_list.append((row["team_id"], t_name))
+
+        if method == "RANDOM":
+            random.shuffle(team_id_list)
+        elif method == "ELO":
+            scored = []
+            for t_id, name in team_id_list:
+                cursor.execute("SELECT rating FROM team_elo WHERE team_id = ?;", (t_id,))
+                e_row = cursor.fetchone()
+                rating = e_row["rating"] if e_row else 1200
+                scored.append((rating, t_id, name))
+            scored.sort(key=lambda x: x[0], reverse=True)
+            team_id_list = [(t_id, name) for _, t_id, name in scored]
+
+        cursor.execute("DELETE FROM team_seeds WHERE tournament_id = ? AND is_locked = 0;", (tournament_id,))
+        
+        seeds = []
+        for idx, (t_id, name) in enumerate(team_id_list, start=1):
+            cursor.execute("""
+                INSERT OR REPLACE INTO team_seeds (tournament_id, team_id, seed_number, seeding_method, is_locked)
+                VALUES (?, ?, ?, ?, 0);
+            """, (tournament_id, t_id, idx, method))
+            seeds.append({"seed_id": cursor.lastrowid, "tournament_id": tournament_id, "team_id": t_id, "team_name": name, "seed_number": idx, "seeding_method": method, "is_locked": 0})
+
+        conn.commit()
+        return seeds
+
+async def generate_tournament_seeds(tournament_id: int, method: str = "RANDOM") -> list[dict]:
+    """Asynchronously generate team seeds."""
+    return await asyncio.to_thread(_generate_tournament_seeds_sync, tournament_id, method)
+
+def _lock_tournament_seeds_sync(tournament_id: int) -> bool:
+    """Lock team seeds before bracket generation."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE team_seeds SET is_locked = 1 WHERE tournament_id = ?;", (tournament_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def lock_tournament_seeds(tournament_id: int) -> bool:
+    """Asynchronously lock seeds."""
+    return await asyncio.to_thread(_lock_tournament_seeds_sync, tournament_id)
+
+def _update_team_elo_after_match_sync(winner_team_id: int, loser_team_id: int, k_factor: int = 32) -> bool:
+    """Idempotently calculate and update team ELO ratings after a verified match."""
+    if not winner_team_id or not loser_team_id or winner_team_id == loser_team_id:
+        return False
+
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT OR IGNORE INTO team_elo (team_id, rating) VALUES (?, 1200);", (winner_team_id,))
+        cursor.execute("INSERT OR IGNORE INTO team_elo (team_id, rating) VALUES (?, 1200);", (loser_team_id,))
+
+        cursor.execute("SELECT rating FROM team_elo WHERE team_id = ?;", (winner_team_id,))
+        r_w = cursor.fetchone()["rating"]
+        cursor.execute("SELECT rating FROM team_elo WHERE team_id = ?;", (loser_team_id,))
+        r_l = cursor.fetchone()["rating"]
+
+        expected_w = 1 / (1 + 10 ** ((r_l - r_w) / 400))
+        expected_l = 1 / (1 + 10 ** ((r_w - r_l) / 400))
+
+        new_r_w = round(r_w + k_factor * (1 - expected_w))
+        new_r_l = round(r_l + k_factor * (0 - expected_l))
+
+        cursor.execute("UPDATE team_elo SET rating = ?, matches_rated = matches_rated + 1, wins = wins + 1, last_updated = CURRENT_TIMESTAMP WHERE team_id = ?;", (new_r_w, winner_team_id))
+        cursor.execute("UPDATE team_elo SET rating = ?, matches_rated = matches_rated + 1, losses = losses + 1, last_updated = CURRENT_TIMESTAMP WHERE team_id = ?;", (new_r_l, loser_team_id))
+
+        conn.commit()
+        return True
+
+async def update_team_elo_after_match(winner_team_id: int, loser_team_id: int, k_factor: int = 32) -> bool:
+    """Asynchronously update team ELO ratings."""
+    return await asyncio.to_thread(_update_team_elo_after_match_sync, winner_team_id, loser_team_id, k_factor)
+
+def _get_or_create_tournament_ruleset_sync(tournament_id: int, game_name: str = "VALORANT", best_of: str = "BO3") -> dict:
+    """Fetch or create ruleset for a tournament."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tournament_rulesets WHERE tournament_id = ?;", (tournament_id,))
+        row = cursor.fetchone()
+        if row:
+            rules = dict(row)
+            rules["allowed_maps"] = json.loads(rules.get("allowed_maps") or "[]")
+            rules["veto_sequence"] = json.loads(rules.get("veto_sequence") or "[]")
+            return rules
+
+        maps = json.dumps(["Ascent", "Bind", "Haven", "Lotus", "Sunset"])
+        seq = json.dumps(["BAN_A", "BAN_B", "PICK_A", "PICK_B", "BAN_A", "BAN_B", "DECIDER"])
+
+        cursor.execute("""
+            INSERT INTO tournament_rulesets (tournament_id, game_name, best_of, allowed_maps, veto_sequence)
+            VALUES (?, ?, ?, ?, ?);
+        """, (tournament_id, game_name, best_of, maps, seq))
+        
+        conn.commit()
+        return {
+            "ruleset_id": cursor.lastrowid, "tournament_id": tournament_id,
+            "game_name": game_name, "best_of": best_of,
+            "allowed_maps": json.loads(maps), "veto_sequence": json.loads(seq),
+            "overtime_rules": "Overtime win by 2 maps/rounds.", "rules_version": "1.0"
+        }
+
+async def get_or_create_tournament_ruleset(tournament_id: int, game_name: str = "VALORANT", best_of: str = "BO3") -> dict:
+    """Asynchronously get or create ruleset."""
+    return await asyncio.to_thread(_get_or_create_tournament_ruleset_sync, tournament_id, game_name, best_of)
+
+def _record_result_correction_sync(match_id: int, admin_id: str, reason: str, old_score_a: int, old_score_b: int, new_score_a: int, new_score_b: int) -> bool:
+    """Record an immutable result correction event in audit log."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO result_corrections (match_id, admin_id, reason, old_score_a, old_score_b, new_score_a, new_score_b)
+            VALUES (?, ?, ?, ?, ?, ?, ?);
+        """, (match_id, str(admin_id), reason, old_score_a, old_score_b, new_score_a, new_score_b))
+
+        cursor.execute("""
+            INSERT INTO audit_logs (admin_id, action, details)
+            VALUES (?, 'CORRECT_MATCH_SCORE', ?);
+        """, (str(admin_id), f"Match #{match_id} score corrected from {old_score_a}-{old_score_b} to {new_score_a}-{new_score_b}. Reason: {reason}"))
+
+        conn.commit()
+        return True
+
+async def record_result_correction(match_id: int, admin_id: str, reason: str, old_score_a: int, old_score_b: int, new_score_a: int, new_score_b: int) -> bool:
+    """Asynchronously record result correction."""
+    return await asyncio.to_thread(_record_result_correction_sync, match_id, admin_id, reason, old_score_a, old_score_b, new_score_a, new_score_b)
+
+def _start_match_veto_session_sync(match_id: int) -> dict | None:
+    """Initialize map veto session for a match based on tournament ruleset."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ? OR public_match_id = ?;", (match_id, str(match_id)))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return None
+
+        match = dict(m_row)
+        m_id = match["match_id"]
+        t_id = match["tournament_id"]
+
+        rules = _get_or_create_tournament_ruleset_sync(t_id)
+        maps = rules.get("allowed_maps") or ["Ascent", "Bind", "Haven", "Lotus", "Sunset"]
+        sequence = rules.get("veto_sequence") or ["BAN_A", "BAN_B", "PICK_A", "PICK_B", "BAN_A", "BAN_B", "DECIDER"]
+
+        initial_state = {
+            "allowed_maps": maps,
+            "available_maps": maps.copy(),
+            "banned_maps": [],
+            "picked_maps": [],
+            "decider_map": None,
+            "veto_sequence": sequence,
+            "current_step_index": 0,
+            "team_a_id": match.get("team1_id"),
+            "team_b_id": match.get("team2_id")
+        }
+
+        first_step = sequence[0] if sequence else "BAN_A"
+        current_turn_team = match.get("team1_id") if "A" in first_step else match.get("team2_id")
+
+        state_json = json.dumps(initial_state)
+
+        cursor.execute("""
+            INSERT OR REPLACE INTO veto_sessions (match_id, current_turn_team_id, veto_state, status)
+            VALUES (?, ?, ?, 'IN_PROGRESS');
+        """, (m_id, current_turn_team, state_json))
+
+        conn.commit()
+        cursor.execute("SELECT * FROM veto_sessions WHERE match_id = ?;", (m_id,))
+        v_row = cursor.fetchone()
+        res = dict(v_row)
+        res["veto_state"] = json.loads(res["veto_state"])
+        return res
+
+async def start_match_veto_session(match_id: int) -> dict | None:
+    """Asynchronously start match veto session."""
+    return await asyncio.to_thread(_start_match_veto_session_sync, match_id)
+
+def _process_veto_action_sync(match_id: int, acting_team_id: int, map_name: str) -> dict | None:
+    """Execute a map ban or pick turn in a veto session."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM veto_sessions WHERE match_id = ? OR CAST(match_id AS TEXT) = ?;", (match_id, str(match_id)))
+        v_row = cursor.fetchone()
+        if not v_row:
+            return None
+
+        veto = dict(v_row)
+        if veto["status"] != "IN_PROGRESS":
+            return veto
+
+        state = json.loads(veto["veto_state"])
+        sequence = state["veto_sequence"]
+        step_idx = state["current_step_index"]
+
+        if step_idx >= len(sequence):
+            return veto
+
+        current_action = sequence[step_idx]
+        available_maps = state["available_maps"]
+
+        if map_name not in available_maps:
+            return None
+
+        action_type = "BAN" if "BAN" in current_action else "PICK"
+        available_maps.remove(map_name)
+
+        if action_type == "BAN":
+            state["banned_maps"].append(map_name)
+        else:
+            state["picked_maps"].append(map_name)
+
+        cursor.execute("""
+            INSERT INTO veto_logs (veto_id, match_id, team_id, action, map_name)
+            VALUES (?, ?, ?, ?, ?);
+        """, (veto["veto_id"], veto["match_id"], acting_team_id, action_type, map_name))
+
+        next_step_idx = step_idx + 1
+        state["current_step_index"] = next_step_idx
+
+        if len(available_maps) == 1 or next_step_idx >= len(sequence):
+            if available_maps:
+                state["decider_map"] = available_maps[0]
+            veto["status"] = "COMPLETED"
+            selected_map_str = ", ".join(state["picked_maps"])
+            if state.get("decider_map"):
+                selected_map_str += f" (Decider: {state['decider_map']})"
+            cursor.execute("UPDATE matches SET map = ? WHERE match_id = ?;", (selected_map_str, veto["match_id"]))
+
+        if next_step_idx < len(sequence):
+            next_step = sequence[next_step_idx]
+            next_turn_team = state["team_a_id"] if "A" in next_step else state["team_b_id"]
+        else:
+            next_turn_team = None
+
+        state_json = json.dumps(state)
+
+        cursor.execute("""
+            UPDATE veto_sessions 
+            SET current_turn_team_id = ?, veto_state = ?, status = ?,
+                completed_at = CASE WHEN ? = 'COMPLETED' THEN CURRENT_TIMESTAMP ELSE completed_at END
+            WHERE veto_id = ?;
+        """, (next_turn_team, state_json, veto["status"], veto["status"], veto["veto_id"]))
+
+        conn.commit()
+        cursor.execute("SELECT * FROM veto_sessions WHERE veto_id = ?;", (veto["veto_id"],))
+        v_updated = dict(cursor.fetchone())
+        v_updated["veto_state"] = json.loads(v_updated["veto_state"])
+        return v_updated
+
+async def process_veto_action(match_id: int, acting_team_id: int, map_name: str) -> dict | None:
+    """Asynchronously process veto action."""
+    return await asyncio.to_thread(_process_veto_action_sync, match_id, acting_team_id, map_name)
+
+def _get_match_veto_state_sync(match_id: int) -> dict | None:
+    """Fetch live map veto session state for a match."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM veto_sessions WHERE match_id = ? OR CAST(match_id AS TEXT) = ?;", (match_id, str(match_id)))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        v = dict(row)
+        v["veto_state"] = json.loads(v["veto_state"])
+        cursor.execute("SELECT * FROM veto_logs WHERE veto_id = ? ORDER BY veto_log_id ASC;", (v["veto_id"],))
+        v["logs"] = [dict(r) for r in cursor.fetchall()]
+        return v
+
+async def get_match_veto_state(match_id: int) -> dict | None:
+    """Asynchronously get match veto state."""
+    return await asyncio.to_thread(_get_match_veto_state_sync, match_id)

@@ -170,16 +170,34 @@ async def get_user_cases_api(user_id: str):
     cases = await get_user_all_cases(user_id)
     return cases
 
-@router.get("/user/dashboard", response_model=Dict[str, Any], summary="Get Full User Dashboard Overview")
-async def get_user_dashboard_api(user_id: str):
-    """Return user profile, active teams, registrations, and support cases for dashboard rendering."""
-    profile = await get_player_full_profile(user_id)
-    regs = await get_user_all_registrations(user_id)
-    cases = await get_user_all_cases(user_id)
-    
-    return {
-        "profile": profile,
-        "registrations": regs,
-        "cases": cases
-    }
+@router.get("/tournaments/{tournament_id}/rules", summary="Get Tournament Ruleset")
+async def get_tournament_ruleset_api(tournament_id: int):
+    """Return tournament ruleset, BO3 veto sequence, allowed maps, and version."""
+    from database.db import get_or_create_tournament_ruleset
+    rules = await get_or_create_tournament_ruleset(tournament_id)
+    return rules
+
+@router.get("/matches/{match_id}/veto", summary="Get Match Veto Session State")
+async def get_match_veto_api(match_id: int):
+    """Return live map veto session state and ban/pick log history."""
+    from database.db import get_match_veto_state
+    state = await get_match_veto_state(match_id)
+    if not state:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Veto session not found for match.")
+    return state
+
+@router.post("/matches/{match_id}/veto/action", summary="Execute Map Veto Ban/Pick Turn")
+async def process_veto_action_api(match_id: int, payload: Dict[str, Any]):
+    """Execute a map ban or pick turn in a veto session."""
+    from database.db import process_veto_action
+    acting_team_id = payload.get("team_id")
+    map_name = payload.get("map_name")
+
+    if not acting_team_id or not map_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="team_id and map_name are required.")
+
+    state = await process_veto_action(match_id, int(acting_team_id), str(map_name))
+    if not state:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid map action or unauthorized turn.")
+    return {"message": "Veto action recorded.", "veto": state}
 

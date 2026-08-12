@@ -20,10 +20,44 @@ from database.db import (
     update_match_result,
     set_player_verification_status,
     set_team_verification_status,
-    update_match_schedule_and_lobby
+    update_match_schedule_and_lobby,
+    generate_tournament_seeds,
+    lock_tournament_seeds,
+    record_result_correction
 )
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Dashboard Endpoints"], dependencies=[Depends(verify_api_key)])
+
+@router.post("/tournaments/{tournament_id}/seeds", summary="Generate or Lock Tournament Seeds")
+async def generate_seeds_api(tournament_id: int, payload: Dict[str, Any]):
+    """Generate team seeds (RANDOM, ELO) or lock seeds."""
+    method = payload.get("method", "RANDOM").upper()
+    lock_only = payload.get("lock", False)
+
+    if lock_only:
+        success = await lock_tournament_seeds(tournament_id)
+        return {"message": f"Tournament #{tournament_id} seeds locked.", "locked": success}
+
+    seeds = await generate_tournament_seeds(tournament_id, method)
+    await log_admin_action("API_ADMIN", "GENERATE_SEEDS", details=f"Generated {len(seeds)} seeds for tournament #{tournament_id} via {method}")
+    return {"message": f"Generated {len(seeds)} seeds via {method}.", "seeds": seeds}
+
+@router.post("/matches/{match_id}/correct-result", summary="Log Match Score Correction")
+async def correct_match_score_api(match_id: int, payload: Dict[str, Any]):
+    """Log an immutable score correction event with audit reason."""
+    admin_id = payload.get("admin_id", "API_ADMIN")
+    reason = payload.get("reason", "Admin score adjustment")
+    old_a = payload.get("old_score_a", 0)
+    old_b = payload.get("old_score_b", 0)
+    new_a = payload.get("new_score_a", 0)
+    new_b = payload.get("new_score_b", 0)
+
+    success = await record_result_correction(match_id, str(admin_id), reason, int(old_a), int(old_b), int(new_a), int(new_b))
+    if not success:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to log score correction.")
+
+    await update_match_result(match_id, int(new_a), int(new_b))
+    return {"message": "Score correction recorded cleanly with audit trail.", "match_id": match_id}
 
 @router.post("/matches/{match_id}/schedule", summary="Schedule Match & Set Lobby Info")
 async def schedule_match_api(match_id: int, payload: Dict[str, Any]):

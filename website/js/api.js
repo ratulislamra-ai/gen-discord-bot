@@ -393,6 +393,32 @@ const Api = {
             throw new Error(err.detail || `HTTP error ${res.status}`);
         }
         return await res.json();
+    /**
+     * Fetch tournament ruleset
+     */
+    async getTournamentRules(tournamentId) {
+        try {
+            const res = await fetch(`${API_BASE}/public/tournaments/${tournamentId}/rules`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Failed to fetch rules for tournament ${tournamentId}:`, err);
+            return null;
+        }
+    },
+
+    /**
+     * Fetch match map veto state
+     */
+    async getMatchVetoState(matchId) {
+        try {
+            const res = await fetch(`${API_BASE}/public/matches/${matchId}/veto`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Failed to fetch veto state for match ${matchId}:`, err);
+            return null;
+        }
     }
 };
 
