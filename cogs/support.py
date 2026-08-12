@@ -421,14 +421,46 @@ class SupportTicketControlView(discord.ui.View):
         await interaction.response.send_message("Select close resolution category:", view=CloseChoiceView(ticket["case_id"]), ephemeral=True)
 
 # ==============================================================================
-# PERSISTENT SUPPORT PANEL
+# PERSISTENT CATEGORY SELECT VIEW
 # ==============================================================================
 
-class SupportPanel(discord.ui.View):
-    """Persistent support panel view containing category selection dropdown."""
+class SupportCategorySelectView(discord.ui.View):
+    """View containing category select menu when user clicks OPEN SUPPORT TICKET."""
 
     def __init__(self):
-        super().__init__(timeout=None)
+        super().__init__(timeout=180)
+
+    @discord.ui.select(
+        placeholder="What do you need help with?",
+        min_values=1,
+        max_values=1,
+        options=[
+            discord.SelectOption(label="Registration Issue", value="REGISTRATION", description="Help with team tournament registration", emoji="📝"),
+            discord.SelectOption(label="Match Issue", value="MATCH", description="Lobby, check-in, or match help", emoji="🎮"),
+            discord.SelectOption(label="Map / Veto Issue", value="VETO", description="Help with map pick/ban veto session", emoji="🗺️"),
+            discord.SelectOption(label="Dispute", value="DISPUTE", description="Dispute a match score or outcome", emoji="⚖️"),
+            discord.SelectOption(label="Player / Team Issue", value="PLAYER_TEAM", description="Roster, team invitation, or profile help", emoji="👤"),
+            discord.SelectOption(label="Payment / Prize Issue", value="PAYMENT", description="Entry fee or prize payout help", emoji="💳"),
+            discord.SelectOption(label="Technical Issue", value="TECHNICAL", description="Website, API, or bot issue", emoji="🐛"),
+            discord.SelectOption(label="Report Player / Team", value="REPORT", description="Report rule violation, cheating, or ringers", emoji="🚨"),
+            discord.SelectOption(label="Other", value="OTHER", description="General support inquiries", emoji="❓")
+        ]
+    )
+    async def select_category(self, interaction: discord.Interaction, select: discord.ui.Select):
+        choice = select.values[0]
+
+        if choice == "REGISTRATION":
+            await interaction.response.send_modal(GeneralSupportModal())
+        elif choice in ("MATCH", "VETO"):
+            await interaction.response.send_modal(TournamentHelpModal())
+        elif choice == "DISPUTE":
+            await interaction.response.send_modal(DisputeModal())
+        elif choice in ("PLAYER_TEAM", "REPORT"):
+            await interaction.response.send_modal(PlayerReportModal())
+        elif choice == "PAYMENT":
+            await interaction.response.send_modal(PaymentSupportModal())
+        else:
+            await interaction.response.send_modal(GeneralSupportModal())
 
 # ==============================================================================
 # PERSISTENT DISCORD SUPPORT PANEL
