@@ -6,7 +6,9 @@ from database.db import (
     get_tournament_by_slug,
     get_approved_teams_by_tournament,
     get_platform_stats,
-    get_public_matches
+    get_public_matches,
+    get_tournament_matches,
+    get_tournament_standings
 )
 
 router = APIRouter(prefix="/api/public", tags=["Public Website Endpoints"])
@@ -50,6 +52,24 @@ async def get_public_approved_teams(slug: str):
     approved_teams = await get_approved_teams_by_tournament(slug)
     return approved_teams
 
+@router.get("/tournaments/{slug}/matches", response_model=List[Dict[str, Any]], summary="Get Matches for Tournament")
+async def get_public_tournament_matches(slug: str):
+    """Return matches for a specific tournament."""
+    matches = await get_tournament_matches(slug)
+    return matches
+
+@router.get("/tournaments/{slug}/bracket", response_model=List[Dict[str, Any]], summary="Get Bracket for Tournament")
+async def get_public_tournament_bracket(slug: str):
+    """Return bracket matches for a specific tournament."""
+    matches = await get_tournament_matches(slug)
+    return matches
+
+@router.get("/tournaments/{slug}/standings", response_model=List[Dict[str, Any]], summary="Get Standings for Tournament")
+async def get_public_tournament_standings(slug: str):
+    """Return leaderboard standings for a specific tournament."""
+    standings = await get_tournament_standings(slug)
+    return standings
+
 @router.get("/stats", response_model=Dict[str, Any], summary="Get Public Platform Stats")
 async def get_public_stats():
     """Return public platform statistics."""
@@ -61,3 +81,4 @@ async def get_public_match_list():
     """Return public match records (live, upcoming, completed)."""
     matches = await get_public_matches()
     return matches
+

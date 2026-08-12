@@ -22,7 +22,10 @@ from database.db import (
     update_ticket_review_message,
     approve_ticket_registration,
     reject_ticket_registration,
-    get_ticket_by_review_message
+    get_ticket_by_review_message,
+    get_open_tournaments,
+    get_tournament_roster_rules,
+    _get_open_tournaments_sync
 )
 from utils.logo_storage import save_team_logo, validate_logo_file
 import config.settings as settings
@@ -1361,31 +1364,56 @@ class ContinueToTeamView(discord.ui.View):
             await interaction.followup.send("❌ An error occurred while opening the team information form.", ephemeral=True)
 
 class TournamentSelect(discord.ui.Select):
-    """Select menu for choosing a GEN Esports tournament."""
+    """Select menu for choosing a GEN Esports tournament, dynamically populated from database."""
 
-    def __init__(self):
-        options = [
-            discord.SelectOption(
-                label="GEN Valorant Championship",
-                value="GEN Valorant Championship",
-                description="5v5 Tactical Shooter Championship",
-                emoji="🏆"
-            ),
-            discord.SelectOption(
-                label="GEN Weekly Cup",
-                value="GEN Weekly Cup",
-                description="Weekly Competitive Esports Cup",
-                emoji="🏆"
-            ),
-            discord.SelectOption(
-                label="GEN Community Tournament",
-                value="GEN Community Tournament",
-                description="Open Community Tournament",
-                emoji="🏆"
-            )
-        ]
+    def __init__(self, open_tournaments: list[dict] = None):
+        if open_tournaments is None:
+            try:
+                open_tournaments = _get_open_tournaments_sync()
+            except Exception as e:
+                logger.error(f"Error fetching open tournaments for Select menu: {e}")
+                open_tournaments = []
+
+        options = []
+        if open_tournaments:
+            for t in open_tournaments:
+                title = t.get("title", "GEN Tournament")
+                game = t.get("game_type") or t.get("game") or "Esports"
+                prize = t.get("prize_info", "")
+                is_full = t.get("is_full", False) or t.get("registration_status") == "FULL"
+                
+                # Exclude full tournaments from active Discord registration dropdown
+                if is_full:
+                    continue
+
+                desc = f"{game} • Prize: {prize}" if prize else f"{game} Series"
+                options.append(
+                    discord.SelectOption(
+                        label=title[:100],
+                        value=title[:100],
+                        description=desc[:100],
+                        emoji="🏆"
+                    )
+                )
+
+        if not options:
+            options = [
+                discord.SelectOption(
+                    label="GEN Valorant Championship",
+                    value="GEN Valorant Championship",
+                    description="5v5 Tactical Shooter Championship",
+                    emoji="🏆"
+                ),
+                discord.SelectOption(
+                    label="GEN PUBG Mobile Championship",
+                    value="GEN PUBG Mobile Championship",
+                    description="PUBG Mobile Championship",
+                    emoji="🏆"
+                )
+            ]
+
         super().__init__(
-            placeholder="Choose a tournament to register for...",
+            placeholder="Choose an open tournament to register for...",
             min_values=1,
             max_values=1,
             options=options,
@@ -1430,9 +1458,9 @@ class TournamentSelect(discord.ui.Select):
 class TournamentSelectionView(discord.ui.View):
     """Persistent View containing TournamentSelect dropdown and CloseTicket button."""
 
-    def __init__(self):
+    def __init__(self, open_tournaments: list[dict] = None):
         super().__init__(timeout=None)
-        self.add_item(TournamentSelect())
+        self.add_item(TournamentSelect(open_tournaments=open_tournaments))
 
     @discord.ui.button(
         label="Close Ticket",

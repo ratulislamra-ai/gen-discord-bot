@@ -11,6 +11,9 @@ const App = {
     currentView: 'home',
     discordInviteUrl: '',
     autoRefreshInterval: null,
+    adminApiKey: sessionStorage.getItem('gen_admin_api_key') || '',
+    adminTab: 'overview',
+    activeTournamentSlug: '',
 
     async init() {
         this.bindEvents();
@@ -25,7 +28,7 @@ const App = {
         }
         // Poll every 15 seconds for automatic Discord -> Database -> Website sync
         this.autoRefreshInterval = setInterval(async () => {
-            if (this.currentView === 'home' || this.currentView === 'tournaments' || this.currentView === 'teams') {
+            if (['home', 'tournaments', 'teams', 'matches', 'brackets', 'leaderboards'].includes(this.currentView)) {
                 await this.refreshActiveViewData();
             }
         }, 15000);
@@ -43,51 +46,11 @@ const App = {
                     statVals[3].textContent = stats.registered_players ?? 0;
                 }
             } else if (this.currentView === 'teams') {
-                const tournaments = await Api.getTournaments();
-                const activeTournaments = tournaments.filter(t => t.game_type === 'VALORANT' || t.game_type === 'PUBG MOBILE' || t.game_type === 'Valorant');
-                let allApprovedTeams = [];
-
-                for (const t of activeTournaments) {
-                    const teams = await Api.getApprovedTeams(t.slug);
-                    allApprovedTeams = allApprovedTeams.concat(teams);
-                }
-
-                const teamsContainer = document.querySelector('#app-content .teams-grid');
-                if (teamsContainer) {
-                    let teamsHtml = allApprovedTeams.length === 0 ? `
-                        <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
-                            <div style="font-size: 3rem; margin-bottom: 1rem;">🛡️</div>
-                            <h3>No Approved Teams Yet</h3>
-                            <p style="color: var(--text-secondary); margin-top: 0.5rem;">Approved team rosters will automatically post here upon admin review.</p>
-                        </div>
-                    ` : allApprovedTeams.map(team => {
-                        const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/64?text=GEN';
-                        const encodedTeam = encodeURIComponent(JSON.stringify(team));
-                        return `
-                            <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${encodedTeam}')">
-                                <div class="team-card-header">
-                                    <img src="${logoSrc}" alt="${team.team_name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
-                                    <div>
-                                        <div class="team-info-name">${team.team_name}</div>
-                                        <div class="team-info-captain">👑 Captain: ${team.captain_name}</div>
-                                    </div>
-                                </div>
-                                <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-                                    🏆 ${team.tournament}
-                                </div>
-                                <div class="roster-grid">
-                                    ${(team.roster || []).map(p => `
-                                        <div class="roster-row">
-                                            <span class="roster-role">${p.role}</span>
-                                            <span class="roster-ign">${p.ign}</span>
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            </div>
-                        `;
-                    }).join('');
-                    teamsContainer.innerHTML = teamsHtml;
-                }
+                await this.renderTeamsView();
+            } else if (this.currentView === 'tournaments') {
+                await this.renderTournamentsView();
+            } else if (this.currentView === 'matches') {
+                await this.renderMatchesView();
             }
         } catch (err) {
             console.warn('Silent background refresh notice:', err);
@@ -103,23 +66,19 @@ const App = {
         if (this.discordInviteUrl && this.discordInviteUrl.startsWith('http')) {
             window.open(this.discordInviteUrl, '_blank', 'noopener');
         } else {
-            const modal = document.getElementById('details-modal');
-            const modalBody = document.getElementById('modal-body');
-            modalBody.innerHTML = `
+            this.showModal(`
                 <div style="text-align: center; padding: 1.5rem;">
                     <div style="font-size: 3rem; margin-bottom: 1rem; color: var(--accent-gold);">💬</div>
                     <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 0.75rem;">Discord Server Invite</h3>
                     <p style="color: var(--text-secondary); line-height: 1.6; font-size: 0.95rem;">
-                        The GEN Esports Discord server invite link is currently being updated by tournament administrators. Please check back shortly or ask an admin in server channels.
+                        The GEN Esports Discord server invite link is currently being updated. Please check back shortly.
                     </p>
                 </div>
-            `;
-            modal.classList.remove('hidden');
+            `);
         }
     },
 
     bindEvents() {
-        // Mobile Toggle Menu
         const mobileToggle = document.getElementById('mobile-toggle-btn');
         const navMenu = document.getElementById('nav-menu');
         if (mobileToggle && navMenu) {
@@ -128,7 +87,6 @@ const App = {
             });
         }
 
-        // Navigation links
         document.querySelectorAll('[data-view]').forEach(link => {
             link.addEventListener('click', (e) => {
                 const view = link.getAttribute('data-view');
@@ -140,7 +98,6 @@ const App = {
             });
         });
 
-        // Modal Close Button & Backdrop
         const modalClose = document.getElementById('modal-close-btn');
         const modal = document.getElementById('details-modal');
         if (modalClose) {
@@ -153,672 +110,942 @@ const App = {
         }
     },
 
-    updateNavActive(view) {
-        document.querySelectorAll('.nav-link').forEach(link => {
-            if (link.getAttribute('data-view') === view) {
-                link.classList.add('active');
-            } else {
-                link.classList.remove('active');
-            }
-        });
-    },
-
-    async renderView(view) {
-        this.currentView = view;
-        this.updateNavActive(view);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-
-        const container = document.getElementById('app-content');
-        container.innerHTML = `
-            <div style="padding: 5rem; text-align: center; font-family: var(--font-heading);">
-                <div style="font-size: 2.5rem; margin-bottom: 1rem; color: var(--accent-cyan);">⚡</div>
-                <h2 style="font-size: 1.8rem; font-weight: 800;">LOADING GEN ESPORTS PLATFORM...</h2>
-            </div>
-        `;
-
-        switch (view) {
-            case 'home':
-                await this.renderHomeView(container);
-                break;
-            case 'tournaments':
-                await this.renderTournamentsView(container);
-                break;
-            case 'teams':
-                await this.renderTeamsView(container);
-                break;
-            case 'matches':
-            case 'brackets':
-                await this.renderBracketsView(container);
-                break;
-            case 'leaderboards':
-                await this.renderLeaderboardsView(container);
-                break;
-            case 'admin':
-                await this.renderAdminView(container);
-                break;
-            default:
-                await this.renderHomeView(container);
-        }
-    },
-
-    // =========================================================================
-    // 1. HOMEPAGE VIEW (NO DEMO DATA & DYNAMIC DISCORD INVITE)
-    // =========================================================================
-    async renderHomeView(container) {
-        const stats = await Api.getStats();
-        const tournaments = await Api.getTournaments();
-        const matches = await Api.getMatches();
-
-        // Filter active supported games
-        const activeTournaments = tournaments.filter(t => t.game_type === 'VALORANT' || t.game_type === 'PUBG MOBILE' || t.game_type === 'Valorant');
-
-        // 1. Featured Tournaments Cards
-        let featuredTournamentsHtml = activeTournaments.length === 0 ? `
-            <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
-                <div style="font-size: 2.5rem; margin-bottom: 1rem;">🏆</div>
-                <h3>No Tournaments Available</h3>
-                <p style="color: var(--text-secondary); margin-top: 0.5rem;">Check back soon for upcoming GEN Esports competitions.</p>
-            </div>
-        ` : activeTournaments.map(t => `
-            <div class="tournament-card glass-panel">
-                <div class="card-banner">
-                    <span class="game-badge">🎮 ${t.game_type || 'Esports'}</span>
-                    <span class="status-badge ${t.status === 'REGISTRATION_OPEN' ? 'status-open' : 'status-ongoing'}">
-                        ${t.status === 'REGISTRATION_OPEN' ? 'Registration Open' : t.status}
-                    </span>
-                    <div class="card-banner-title">${(t.game_type || 'GEN').substring(0, 4)}</div>
-                </div>
-                <div class="card-body">
-                    <h3 class="card-name">${t.title}</h3>
-                    <p class="card-desc">${t.rules_text || 'GEN Esports competitive tournament series. Register your squad via Discord.'}</p>
-
-                    <div class="card-meta">
-                        <div class="meta-item">
-                            <span class="meta-label">Format</span>
-                            <span class="meta-val">Competitive Format</span>
-                        </div>
-                        <div class="meta-item">
-                            <span class="meta-label">Max Capacity</span>
-                            <span class="meta-val">${t.max_teams || 16} Teams</span>
-                        </div>
-                    </div>
-
-                    <button class="btn btn-primary" onclick="App.showApprovedTeamsModal('${t.slug}', '${t.title}')">
-                        🏆 View Approved Teams
-                    </button>
-                </div>
-            </div>
-        `).join('');
-
-        // 2. Upcoming Tournaments List
-        const upcomingTournaments = activeTournaments.filter(t => t.status === 'REGISTRATION_OPEN' || t.status === 'DRAFT');
-        let upcomingHtml = upcomingTournaments.length === 0 ? `
-            <p style="color: var(--text-secondary);">No upcoming tournaments scheduled at this time.</p>
-        ` : upcomingTournaments.map(t => `
-            <div style="display: flex; align-items: center; justify-content: space-between; padding: 1.25rem 1.5rem; margin-bottom: 1rem;" class="glass-panel">
-                <div style="display: flex; align-items: center; gap: 1rem;">
-                    <div style="font-size: 1.8rem;">🎮</div>
-                    <div>
-                        <h4 style="font-family: var(--font-heading); font-size: 1.15rem; font-weight: 700;">${t.title}</h4>
-                        <span style="font-size: 0.85rem; color: var(--accent-cyan); font-weight: 600;">Status: Registration Open</span>
-                    </div>
-                </div>
-                <button class="btn btn-secondary" onclick="App.showApprovedTeamsModal('${t.slug}', '${t.title}')">View Details</button>
-            </div>
-        `).join('');
-
-        // 3. Approved Teams Preview (Real API data)
-        let allApprovedTeams = [];
-        for (const t of activeTournaments) {
-            const teams = await Api.getApprovedTeams(t.slug);
-            allApprovedTeams = allApprovedTeams.concat(teams);
-        }
-
-        let teamsPreviewHtml = allApprovedTeams.length === 0 ? `
-            <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
-                <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🛡️</div>
-                <h3>No Approved Teams</h3>
-                <p style="color: var(--text-secondary);">Approved tournament registrations will appear here.</p>
-            </div>
-        ` : allApprovedTeams.slice(0, 3).map(team => {
-            const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/64?text=GEN';
-            return `
-                <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${encodeURIComponent(JSON.stringify(team))}')">
-                    <div class="team-card-header">
-                        <img src="${logoSrc}" alt="${team.team_name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
-                        <div>
-                            <div class="team-info-name">${team.team_name}</div>
-                            <div class="team-info-captain">👑 Captain: ${team.captain_name}</div>
-                        </div>
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.75rem;">
-                        🏆 ${team.tournament}
-                    </div>
-                    <div class="roster-grid">
-                        ${(team.roster || []).slice(0, 3).map(p => `
-                            <div class="roster-row">
-                                <span class="roster-role">${p.role}</span>
-                                <span class="roster-ign">${p.ign}</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        // 4. Matches Preview (Real API Data or Clean Empty State)
-        let matchesHtml = matches.length === 0 ? `
-            <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
-                <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">⚔️</div>
-                <h3 style="font-family: var(--font-heading);">No Matches Scheduled Yet</h3>
-                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.3rem;">
-                    Match schedules and results will update live once tournament brackets begin.
-                </p>
-            </div>
-        ` : matches.slice(0, 3).map(m => `
-            <div class="match-card glass-panel">
-                <div class="match-header">
-                    <span>${m.tournament_name || 'GEN Tournament'}</span>
-                    <span style="color: var(--accent-cyan); font-weight: 700;">${m.stage_name || 'Match'}</span>
-                </div>
-                <div class="match-vs-box">
-                    <div class="match-team-block">
-                        <div class="match-team-name">${m.team1_name || 'Team 1'}</div>
-                    </div>
-                    <div class="match-score">${m.team1_score ?? 0} - ${m.team2_score ?? 0}</div>
-                    <div class="match-team-block">
-                        <div class="match-team-name">${m.team2_name || 'Team 2'}</div>
-                    </div>
-                </div>
-                <div style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">
-                    Status: ${m.status}
-                </div>
-            </div>
-        `).join('');
-
-        // Assemble Full Homepage Layout
-        container.innerHTML = `
-            <!-- 2-Column Hero Section -->
-            <section class="hero-container">
-                <div class="hero-bg-grid"></div>
-                <div class="hero-content">
-                    <div class="hero-tag">⚡ INDEPENDENT ESPORTS PLATFORM</div>
-                    <h1 class="hero-title">
-                        COMPETE. CONQUER.<br>
-                        <span class="hero-title-accent">BECOME LEGEND.</span>
-                    </h1>
-                    <p class="hero-subtitle">
-                        GEN Esports is an independent competitive gaming platform built for players, teams, and communities. Register teams seamlessly via Discord, track live match brackets, explore approved team rosters, and rise on season leaderboards.
-                    </p>
-                    <div class="hero-cta-group">
-                        <button class="btn btn-primary" onclick="App.renderView('tournaments')">
-                            🏆 Explore Tournaments
-                        </button>
-                        <button onclick="App.openDiscordInvite()" class="btn btn-discord">
-                            Join Discord Server
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Right Column Visual Graphic -->
-                <div class="hero-visual-wrapper">
-                    <div class="hero-hud-card">
-                        <span class="hero-hud-badge">🔴 ARENA ACTIVE</span>
-                        <img src="/static/assets/hero_emblem.png" alt="GEN Esports Championship Emblem" onerror="this.src='https://via.placeholder.com/400?text=GEN+ESPORTS'">
-                        <div class="hero-hud-meta">
-                            <span>⚡ COMMUNITY COMPETITIONS</span>
-                            <span style="color: var(--accent-green); font-weight: 700;">GEN ENGINE 2.0</span>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Real API Platform Stats -->
-            <section class="stats-banner">
-                <div class="stat-box glass-panel">
-                    <div class="stat-val">${stats.total_tournaments ?? 0}</div>
-                    <div class="stat-lbl">Active Tournaments</div>
-                </div>
-                <div class="stat-box glass-panel">
-                    <div class="stat-val" style="color: var(--accent-green);">${stats.approved_registrations ?? 0}</div>
-                    <div class="stat-lbl">Approved Teams</div>
-                </div>
-                <div class="stat-box glass-panel">
-                    <div class="stat-val" style="color: var(--accent-cyan);">${stats.completed_matches ?? 0}</div>
-                    <div class="stat-lbl">Completed Matches</div>
-                </div>
-                <div class="stat-box glass-panel">
-                    <div class="stat-val" style="color: var(--accent-gold);">${stats.registered_players ?? 0}</div>
-                    <div class="stat-lbl">Registered Players</div>
-                </div>
-            </section>
-
-            <!-- Featured Tournaments Section -->
-            <section style="margin-bottom: 4rem;">
-                <div class="section-header">
-                    <div>
-                        <h2 class="section-title">🏆 Featured Tournaments</h2>
-                        <p class="section-subtitle">Active esports championships currently open for registration.</p>
-                    </div>
-                    <button class="btn btn-secondary" onclick="App.renderView('tournaments')">View All Tournaments</button>
-                </div>
-                <div class="tournaments-grid">
-                    ${featuredTournamentsHtml}
-                </div>
-            </section>
-
-            <!-- Upcoming Tournaments Section -->
-            <section style="margin-bottom: 4rem;">
-                <div class="section-header">
-                    <div>
-                        <h2 class="section-title">📅 Upcoming Competitions</h2>
-                        <p class="section-subtitle">Get your roster ready for upcoming tournament registrations.</p>
-                    </div>
-                </div>
-                <div>
-                    ${upcomingHtml}
-                </div>
-            </section>
-
-            <!-- Live & Recent Matches Section -->
-            <section style="margin-bottom: 4rem;">
-                <div class="section-header">
-                    <div>
-                        <h2 class="section-title">⚔️ Recent Results & Live Matches</h2>
-                        <p class="section-subtitle">Real-time match updates and tournament standings.</p>
-                    </div>
-                    <button class="btn btn-secondary" onclick="App.renderView('brackets')">View Bracket View</button>
-                </div>
-                <div class="matches-grid">
-                    ${matchesHtml}
-                </div>
-            </section>
-
-            <!-- Top Teams Roster Showcase -->
-            <section style="margin-bottom: 4rem;">
-                <div class="section-header">
-                    <div>
-                        <h2 class="section-title">🛡️ Top Approved Teams</h2>
-                        <p class="section-subtitle">Verified teams registered for GEN Esports tournament series.</p>
-                    </div>
-                    <button class="btn btn-secondary" onclick="App.renderView('teams')">View All Teams</button>
-                </div>
-                <div class="teams-grid">
-                    ${teamsPreviewHtml}
-                </div>
-            </section>
-
-            <!-- Final Call To Action -->
-            <section class="cta-banner">
-                <h2 class="cta-title">READY TO COMPETE?</h2>
-                <p class="cta-desc">
-                    Build your roster. Enter the arena. Make your name known.
-                </p>
-                <div style="display: flex; gap: 1.25rem; justify-content: center; flex-wrap: wrap;">
-                    <button class="btn btn-primary" onclick="App.renderView('tournaments')">EXPLORE TOURNAMENTS</button>
-                    <button onclick="App.openDiscordInvite()" class="btn btn-discord">JOIN DISCORD</button>
-                </div>
-            </section>
-        `;
-    },
-
-    // =========================================================================
-    // 2. TOURNAMENTS VIEW
-    // =========================================================================
-    async renderTournamentsView(container) {
-        const tournaments = await Api.getTournaments();
-        const activeTournaments = tournaments.filter(t => t.game_type === 'VALORANT' || t.game_type === 'PUBG MOBILE' || t.game_type === 'Valorant');
-
-        let gridHtml = activeTournaments.length === 0 ? `
-            <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
-                <div style="font-size: 3rem; margin-bottom: 1rem;">🏆</div>
-                <h3>No Active Tournaments</h3>
-                <p style="color: var(--text-secondary); margin-top: 0.5rem;">New tournament announcements will be posted here and on Discord.</p>
-            </div>
-        ` : activeTournaments.map(t => `
-            <div class="tournament-card glass-panel">
-                <div class="card-banner">
-                    <span class="game-badge">🎮 ${t.game_type || 'Esports'}</span>
-                    <span class="status-badge status-open">${t.status}</span>
-                    <div class="card-banner-title">${(t.game_type || 'GEN').substring(0, 4)}</div>
-                </div>
-                <div class="card-body">
-                    <h3 class="card-name">${t.title}</h3>
-                    <p class="card-desc">${t.rules_text}</p>
-                    <div class="card-meta">
-                        <div class="meta-item">
-                            <span class="meta-label">Format</span>
-                            <span class="meta-val">Competitive Format</span>
-                        </div>
-                        <div class="meta-item">
-                            <span class="meta-label">Max Teams</span>
-                            <span class="meta-val">${t.max_teams} Teams</span>
-                        </div>
-                    </div>
-                    <button class="btn btn-primary" onclick="App.showApprovedTeamsModal('${t.slug}', '${t.title}')">
-                        👥 View Approved Teams
-                    </button>
-                </div>
-            </div>
-        `).join('');
-
-        container.innerHTML = `
-            <div class="section-header">
-                <div>
-                    <h1 class="section-title">🎮 Tournament Directory</h1>
-                    <p class="section-subtitle">Browse active competitions and view approved team rosters.</p>
-                </div>
-            </div>
-            <div class="tournaments-grid">
-                ${gridHtml}
-            </div>
-        `;
-    },
-
-    // =========================================================================
-    // 3. TEAMS & ROSTERS VIEW
-    // =========================================================================
-    async renderTeamsView(container) {
-        const tournaments = await Api.getTournaments();
-        const activeTournaments = tournaments.filter(t => t.game_type === 'VALORANT' || t.game_type === 'PUBG MOBILE' || t.game_type === 'Valorant');
-        let allApprovedTeams = [];
-
-        for (const t of activeTournaments) {
-            const teams = await Api.getApprovedTeams(t.slug);
-            allApprovedTeams = allApprovedTeams.concat(teams);
-        }
-
-        let teamsHtml = allApprovedTeams.length === 0 ? `
-            <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
-                <div style="font-size: 3rem; margin-bottom: 1rem;">🛡️</div>
-                <h3>No Approved Teams Yet</h3>
-                <p style="color: var(--text-secondary); margin-top: 0.5rem;">Approved team rosters will automatically post here upon admin review.</p>
-            </div>
-        ` : allApprovedTeams.map(team => {
-            const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/64?text=GEN';
-            const encodedTeam = encodeURIComponent(JSON.stringify(team));
-            return `
-                <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${encodedTeam}')">
-                    <div class="team-card-header">
-                        <img src="${logoSrc}" alt="${team.team_name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
-                        <div>
-                            <div class="team-info-name">${team.team_name}</div>
-                            <div class="team-info-captain">👑 Captain: ${team.captain_name}</div>
-                        </div>
-                    </div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-                        🏆 ${team.tournament}
-                    </div>
-                    <div class="roster-grid">
-                        ${(team.roster || []).map(p => `
-                            <div class="roster-row">
-                                <span class="roster-role">${p.role}</span>
-                                <span class="roster-ign">${p.ign}</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }).join('');
-
-        container.innerHTML = `
-            <div class="section-header">
-                <div>
-                    <h1 class="section-title">🛡️ Approved Team Directory</h1>
-                    <p class="section-subtitle">Explore team profiles and player rosters.</p>
-                </div>
-            </div>
-            <div class="teams-grid">
-                ${teamsHtml}
-            </div>
-        `;
-    },
-
-    // =========================================================================
-    // 4. BRACKETS & MATCHES VIEW (NO FAKE/DEMO DATA - REAL OR EMPTY STATE)
-    // =========================================================================
-    async renderBracketsView(container) {
-        const matches = await Api.getMatches();
-
-        let contentHtml = '';
-        if (matches.length === 0) {
-            // Required Professional Empty State
-            contentHtml = `
-                <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; margin-top: 1rem;">
-                    <div style="font-size: 3.5rem; margin-bottom: 1rem;">⚔️</div>
-                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem; font-weight: 800;">Bracket Not Started</h2>
-                    <p style="color: var(--text-secondary); max-width: 500px; margin: 0.5rem auto 1.5rem auto; font-size: 1rem;">
-                        Teams and matchups will appear here once the tournament bracket is generated.
-                    </p>
-                    <button class="btn btn-primary" onclick="App.renderView('tournaments')">Explore Tournaments</button>
-                </div>
-            `;
-        } else {
-            contentHtml = `
-                <div class="glass-panel" style="padding: 2rem; margin-bottom: 2rem;">
-                    <h3 style="font-family: var(--font-heading); color: var(--accent-cyan); margin-bottom: 1.5rem; font-size: 1.4rem;">
-                        🏆 Live Tournament Matches
-                    </h3>
-                    <div class="matches-grid">
-                        ${matches.map(m => `
-                            <div class="match-card glass-panel">
-                                <div class="match-header">
-                                    <span>${m.tournament_name || 'GEN Tournament'}</span>
-                                    <span style="color: var(--accent-cyan); font-weight: 700;">${m.stage_name || 'Match'}</span>
-                                </div>
-                                <div class="match-vs-box">
-                                    <div class="match-team-block">
-                                        <div class="match-team-name">${m.team1_name || 'Team 1'}</div>
-                                    </div>
-                                    <div class="match-score">${m.team1_score ?? 0} - ${m.team2_score ?? 0}</div>
-                                    <div class="match-team-block">
-                                        <div class="match-team-name">${m.team2_name || 'Team 2'}</div>
-                                    </div>
-                                </div>
-                                <div style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">
-                                    Status: ${m.status}
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-        }
-
-        container.innerHTML = `
-            <div class="section-header">
-                <div>
-                    <h1 class="section-title">⚔️ Tournament Brackets & Schedule</h1>
-                    <p class="section-subtitle">Real-time match bracket elimination tree visualizer.</p>
-                </div>
-            </div>
-            ${contentHtml}
-        `;
-    },
-
-    // =========================================================================
-    // 5. LEADERBOARDS VIEW (REAL OR CLEAN EMPTY STATE)
-    // =========================================================================
-    async renderLeaderboardsView(container) {
-        container.innerHTML = `
-            <div class="section-header">
-                <div>
-                    <h1 class="section-title">🥇 Season Standings & Leaderboards</h1>
-                    <p class="section-subtitle">Season standings, circuit points, and prize money distribution.</p>
-                </div>
-            </div>
-
-            <div class="glass-panel" style="padding: 4rem 2rem; text-align: center;">
-                <div style="font-size: 3.5rem; margin-bottom: 1rem;">🥇</div>
-                <h2 style="font-family: var(--font-heading); font-size: 1.8rem; font-weight: 800;">No Season Standings Yet</h2>
-                <p style="color: var(--text-secondary); max-width: 500px; margin: 0.5rem auto 1.5rem auto;">
-                    Tournament standings and team rankings will populate once official matches conclude.
-                </p>
-                <button class="btn btn-primary" onclick="App.renderView('tournaments')">Explore Active Tournaments</button>
-            </div>
-        `;
-    },
-
-    // =========================================================================
-    // 6. ADMIN PORTAL VIEW
-    // =========================================================================
-    async renderAdminView(container) {
-        container.innerHTML = `
-            <div class="section-header">
-                <div>
-                    <h1 class="section-title">🔑 Admin Control Portal</h1>
-                    <p class="section-subtitle">Manage tournament registrations, audit queues, and system status.</p>
-                </div>
-            </div>
-
-            <div class="glass-panel" style="max-width: 520px; margin: 2rem auto; padding: 2.5rem;">
-                <h3 style="font-family: var(--font-heading); margin-bottom: 1rem; color: var(--accent-gold); font-size: 1.4rem;">
-                    🔑 Authenticate Admin Access
-                </h3>
-                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.5rem;">
-                    Enter the configured <code style="color: var(--accent-cyan); font-weight: 700;">GEN_API_KEY</code> from your server environment to unlock management tools.
-                </p>
-                <div style="display: flex; flex-direction: column; gap: 1rem;">
-                    <input type="password" id="admin-api-key-input" placeholder="Enter GEN_API_KEY..." style="padding: 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card); background: rgba(0,0,0,0.6); color: #fff; font-size: 1rem;">
-                    <button class="btn btn-primary" onclick="App.authenticateAdmin()">Authenticate Admin Portal</button>
-                    <div id="admin-auth-error" style="color: var(--accent-red); font-size: 0.9rem;" class="hidden"></div>
-                </div>
-            </div>
-
-            <div id="admin-dashboard-results" class="hidden"></div>
-        `;
-    },
-
-    async authenticateAdmin() {
-        const input = document.getElementById('admin-api-key-input');
-        const errDiv = document.getElementById('admin-auth-error');
-        const resultsDiv = document.getElementById('admin-dashboard-results');
-        const key = input ? input.value.trim() : '';
-
-        if (!key) {
-            errDiv.innerText = 'Please enter an API key.';
-            errDiv.classList.remove('hidden');
-            return;
-        }
-
-        try {
-            const stats = await Api.getAdminStats(key);
-            errDiv.classList.add('hidden');
-
-            resultsDiv.innerHTML = `
-                <div class="stats-banner" style="margin-top: 2.5rem;">
-                    <div class="stat-box glass-panel" style="border-left-color: var(--accent-green);">
-                        <div class="stat-val" style="color: var(--accent-green);">${stats.approved_registrations}</div>
-                        <div class="stat-lbl">APPROVED REGISTRATIONS</div>
-                    </div>
-                    <div class="stat-box glass-panel" style="border-left-color: var(--accent-gold);">
-                        <div class="stat-val" style="color: var(--accent-gold);">${stats.pending_registrations}</div>
-                        <div class="stat-lbl">PENDING REVIEW</div>
-                    </div>
-                    <div class="stat-box glass-panel" style="border-left-color: var(--accent-red);">
-                        <div class="stat-val" style="color: var(--accent-red);">${stats.rejected_registrations}</div>
-                        <div class="stat-lbl">REJECTED</div>
-                    </div>
-                    <div class="stat-box glass-panel">
-                        <div class="stat-val">${stats.total_registrations}</div>
-                        <div class="stat-lbl">TOTAL SUBMISSIONS</div>
-                    </div>
-                </div>
-
-                <div class="glass-panel" style="margin-top: 2rem; padding: 2rem;">
-                    <h3 style="font-family: var(--font-heading); color: var(--accent-cyan); margin-bottom: 1.25rem;">
-                        ⚡ System Connection & Server Status
-                    </h3>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1.5rem;">
-                        <div style="padding: 1rem; background: rgba(0,255,136,0.05); border: 1px solid var(--accent-green); border-radius: 8px;">
-                            🟢 REST API Server<br>
-                            <strong style="color: var(--accent-green);">ONLINE (Port 8000)</strong>
-                        </div>
-                        <div style="padding: 1rem; background: rgba(0,240,255,0.05); border: 1px solid var(--accent-cyan); border-radius: 8px;">
-                            🟢 Discord Gateway<br>
-                            <strong style="color: var(--accent-cyan);">CONNECTED & SYNCED</strong>
-                        </div>
-                        <div style="padding: 1rem; background: rgba(255,215,0,0.05); border: 1px solid var(--accent-gold); border-radius: 8px;">
-                            🟢 SQLite Database<br>
-                            <strong style="color: var(--accent-gold);">SYNCHRONIZED</strong>
-                        </div>
-                    </div>
-                </div>
-            `;
-            resultsDiv.classList.remove('hidden');
-        } catch (err) {
-            errDiv.innerText = '❌ Invalid API Key. Access Denied.';
-            errDiv.classList.remove('hidden');
-        }
-    },
-
-    // Modals
-    async showApprovedTeamsModal(slug, title) {
-        const teams = await Api.getApprovedTeams(slug);
+    showModal(htmlContent) {
         const modal = document.getElementById('details-modal');
         const modalBody = document.getElementById('modal-body');
-
-        let teamsHtml = teams.length === 0 ? '<p style="color: var(--text-secondary); margin-top: 1rem;">No approved teams for this tournament yet.</p>' :
-            teams.map(t => `
-                <div style="padding: 1rem; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 0.8rem; border-left: 3px solid var(--accent-green);">
-                    <h4 style="color: #fff; margin-bottom: 0.3rem; font-family: var(--font-heading);">🛡️ ${t.team_name}</h4>
-                    <div style="font-size: 0.85rem; color: var(--text-secondary);">Registration ID: <code>${t.registration_id}</code></div>
-                    <div style="font-size: 0.85rem; color: var(--accent-green);">Captain: ${t.captain_name}</div>
-                </div>
-            `).join('');
-
-        modalBody.innerHTML = `
-            <h2 style="font-family: var(--font-heading); color: var(--accent-cyan); margin-bottom: 1rem;">
-                🏆 ${title} • Approved Teams
-            </h2>
-            <div style="max-height: 400px; overflow-y: auto;">
-                ${teamsHtml}
-            </div>
-        `;
-        modal.classList.remove('hidden');
-    },
-
-    showTeamProfileModal(encodedTeamStr) {
-        try {
-            const team = JSON.parse(decodeURIComponent(encodedTeamStr));
-            const modal = document.getElementById('details-modal');
-            const modalBody = document.getElementById('modal-body');
-
-            const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/64?text=TEAM';
-            const rosterItems = (team.roster || []).map(p => `
-                <div class="roster-row" style="padding: 0.6rem 1rem;">
-                    <span class="roster-role" style="font-size: 0.9rem;">${p.role}</span>
-                    <span class="roster-ign" style="font-size: 0.95rem;">${p.ign}</span>
-                </div>
-            `).join('');
-
-            modalBody.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 1.25rem; margin-bottom: 1.5rem;">
-                    <img src="${logoSrc}" alt="${team.team_name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
-                    <div>
-                        <h2 style="font-family: var(--font-heading); font-size: 1.8rem; font-weight: 800;">${team.team_name}</h2>
-                        <span style="color: var(--accent-green); font-weight: 600; font-size: 0.9rem;">👑 Captain: ${team.captain_name}</span>
-                    </div>
-                </div>
-                <div style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.25rem;">
-                    🏆 Tournament: <strong>${team.tournament}</strong> | Code: <code>${team.registration_id}</code>
-                </div>
-                <h3 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem; color: var(--accent-cyan);">
-                    📋 Active Roster
-                </h3>
-                <div class="roster-grid">
-                    ${rosterItems}
-                </div>
-            `;
+        if (modal && modalBody) {
+            modalBody.innerHTML = htmlContent;
             modal.classList.remove('hidden');
-        } catch (e) {
-            console.error('Error opening team profile modal:', e);
         }
     },
 
     hideModal() {
         const modal = document.getElementById('details-modal');
         if (modal) modal.classList.add('hidden');
+    },
+
+    async renderView(viewName) {
+        this.currentView = viewName;
+        const container = document.getElementById('app-content');
+        if (!container) return;
+
+        // Update active nav links
+        document.querySelectorAll('.nav-link').forEach(link => {
+            if (link.getAttribute('data-view') === viewName) {
+                link.classList.add('active');
+            } else {
+                link.classList.remove('active');
+            }
+        });
+
+        switch (viewName) {
+            case 'home':
+                await this.renderHomeView();
+                break;
+            case 'tournaments':
+                await this.renderTournamentsView();
+                break;
+            case 'teams':
+                await this.renderTeamsView();
+                break;
+            case 'matches':
+                await this.renderMatchesView();
+                break;
+            case 'brackets':
+                await this.renderBracketsView();
+                break;
+            case 'leaderboards':
+                await this.renderLeaderboardsView();
+                break;
+            case 'admin':
+                await this.renderAdminView();
+                break;
+            default:
+                await this.renderHomeView();
+        }
+
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    },
+
+    // RENDER HOME VIEW
+    async renderHomeView() {
+        const container = document.getElementById('app-content');
+        const stats = await Api.getStats();
+        const tournaments = await Api.getTournaments();
+
+        container.innerHTML = `
+            <section class="hero-section">
+                <div class="hero-container">
+                    <div class="hero-content">
+                        <div class="hero-badge">
+                            <span>🔥 OFFICIAL GEN ESPORTS PLATFORM</span>
+                        </div>
+                        <h1 class="hero-title">
+                            COMPETE IN THE <span class="gradient-text">NEXT GENERATION</span> OF ESPORTS
+                        </h1>
+                        <p class="hero-subtitle">
+                            Register your competitive roster, track live tournament brackets, match scores, and automated leaderboards in real-time.
+                        </p>
+                        <div class="hero-cta-group">
+                            <button onclick="App.openDiscordInvite()" class="btn btn-discord btn-lg">
+                                💬 Join Discord & Register
+                            </button>
+                            <a href="#tournaments" onclick="App.renderView('tournaments')" class="btn btn-secondary btn-lg">
+                                🏆 Browse Tournaments
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="stats-banner glass-panel">
+                <div class="stat-box">
+                    <div class="stat-val">${stats.total_tournaments ?? 0}</div>
+                    <div class="stat-lbl">Active Tournaments</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-val">${stats.approved_registrations ?? 0}</div>
+                    <div class="stat-lbl">Approved Teams</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-val">${stats.completed_matches ?? 0}</div>
+                    <div class="stat-lbl">Completed Matches</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-val">${stats.registered_players ?? 0}</div>
+                    <div class="stat-lbl">Registered Players</div>
+                </div>
+            </section>
+
+            <section style="margin-top: 4rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                    <h2 style="font-family: var(--font-heading); font-size: 2rem;">Featured <span style="color: var(--accent-cyan);">Tournaments</span></h2>
+                    <a href="#tournaments" onclick="App.renderView('tournaments')" style="color: var(--accent-cyan); font-weight: 600; text-decoration: none;">View All &rarr;</a>
+                </div>
+                <div class="tournaments-grid">
+                    ${tournaments.slice(0, 3).map(t => this.buildTournamentCardHtml(t)).join('')}
+                </div>
+            </section>
+        `;
+    },
+
+    // RENDER TOURNAMENTS VIEW
+    async renderTournamentsView() {
+        const container = document.getElementById('app-content');
+        const tournaments = await Api.getTournaments();
+
+        container.innerHTML = `
+            <div style="margin-bottom: 3rem;">
+                <div class="hero-badge">🏆 COMPETITIVE TOURNAMENTS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
+                    ACTIVE & UPCOMING <span class="gradient-text">EVENTS</span>
+                </h1>
+                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
+                    Browse active esports championships. All team registrations are submitted directly via Discord and instantly reflected here upon admin approval.
+                </p>
+            </div>
+
+            <div class="tournaments-grid">
+                ${tournaments.length === 0 ? `
+                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🏆</div>
+                        <h3>No Active Tournaments</h3>
+                        <p style="color: var(--text-secondary);">Check back soon for upcoming GEN Esports events.</p>
+                    </div>
+                ` : tournaments.map(t => this.buildTournamentCardHtml(t)).join('')}
+            </div>
+        `;
+    },
+
+    buildTournamentCardHtml(t) {
+        const approved = t.current_approved_team_count || 0;
+        const maxTeams = t.max_teams || 16;
+        const isFull = approved >= maxTeams || t.registration_status === 'FULL';
+        const progressPct = Math.min(100, Math.round((approved / maxTeams) * 100));
+
+        let statusBadge = `<span class="badge badge-open">🟢 REGISTRATION OPEN</span>`;
+        if (isFull) {
+            statusBadge = `<span class="badge badge-closed">🛑 REGISTRATION FULL</span>`;
+        } else if (t.registration_status === 'CLOSED' || t.status === 'REGISTRATION_CLOSED') {
+            statusBadge = `<span class="badge badge-closed">🔴 REGISTRATION CLOSED</span>`;
+        } else if (t.status === 'ONGOING') {
+            statusBadge = `<span class="badge badge-ongoing">🔵 ONGOING</span>`;
+        } else if (t.status === 'COMPLETED') {
+            statusBadge = `<span class="badge badge-draft">🏆 COMPLETED</span>`;
+        }
+
+        return `
+            <div class="tournament-card glass-panel">
+                <div class="tournament-card-header">
+                    <div>
+                        <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase;">${t.game_type || 'ESPORTS'}</div>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-top: 0.2rem;">${t.title}</h3>
+                    </div>
+                    ${statusBadge}
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1.5rem; line-height: 1.5;">
+                    ${t.description || 'GEN Esports Official Championship Tournament Series.'}
+                </p>
+
+                <div style="background: rgba(255,255,255,0.03); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
+                    <div>💰 <strong>Prize Pool:</strong><br><span style="color: var(--accent-gold); font-weight: 700;">${t.prize_info || '$500 USD'}</span></div>
+                    <div>⚔️ <strong>Format:</strong><br><span style="color: var(--text-primary); font-weight: 600;">${t.format || 'Single Elimination'}</span></div>
+                </div>
+
+                <div style="margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">
+                        <span>Approved Teams</span>
+                        <span style="color: ${isFull ? 'var(--accent-red)' : 'var(--accent-cyan)'};">${approved} / ${maxTeams} Teams ${isFull ? '(FULL)' : ''}</span>
+                    </div>
+                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
+                        <div style="width: ${progressPct}%; height: 100%; background: ${isFull ? 'var(--accent-red)' : 'linear-gradient(90deg, var(--accent-cyan), var(--accent-green))'}; border-radius: 4px;"></div>
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 0.75rem;">
+                    <button onclick="App.showTournamentDetailsModal('${t.slug}')" class="btn btn-secondary" style="flex: 1; font-size: 0.85rem;">
+                        ℹ️ Details & Teams
+                    </button>
+                    ${isFull ? `
+                        <button disabled class="btn btn-secondary" style="flex: 1; font-size: 0.85rem; opacity: 0.6; cursor: not-allowed;">
+                            🛑 Registration Full
+                        </button>
+                    ` : `
+                        <button onclick="App.openDiscordInvite()" class="btn btn-discord" style="flex: 1; font-size: 0.85rem;">
+                            💬 Register in Discord
+                        </button>
+                    `}
+                </div>
+            </div>
+        `;
+    },
+
+    async showTournamentDetailsModal(slug) {
+        const t = await Api.getTournamentDetails(slug);
+        const approvedTeams = await Api.getApprovedTeams(slug);
+        if (!t) return;
+
+        const approved = t.current_approved_team_count || approvedTeams.length || 0;
+        const maxTeams = t.max_teams || 16;
+        const isFull = approved >= maxTeams || t.registration_status === 'FULL';
+
+        const teamsListHtml = approvedTeams.length === 0 ? `
+            <div style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
+                No approved teams registered yet for this tournament.
+            </div>
+        ` : `
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; max-height: 250px; overflow-y: auto;">
+                ${approvedTeams.map(tm => `
+                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
+                        <img src="${tm.team_logo_url || 'https://via.placeholder.com/40'}" style="width: 36px; height: 36px; border-radius: 6px; object-fit: cover;" onerror="this.src='https://via.placeholder.com/40?text=TEAM'">
+                        <div>
+                            <div style="font-weight: 700; font-size: 0.9rem;">${tm.team_name}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">👑 ${tm.captain_name}</div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+
+        this.showModal(`
+            <div>
+                <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase;">${t.game_type || 'ESPORTS'}</div>
+                <h2 style="font-family: var(--font-heading); font-size: 2rem; margin-top: 0.25rem;">${t.title}</h2>
+                <p style="color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.5;">${t.description || ''}</p>
+
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin: 1.5rem 0; background: rgba(255,255,255,0.03); padding: 1rem; border-radius: var(--radius-md);">
+                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">PRIZE POOL</span><br><strong style="color: var(--accent-gold);">${t.prize_info || '$500 USD'}</strong></div>
+                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">FORMAT</span><br><strong>${t.format || 'Single Elimination'}</strong></div>
+                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">MAX TEAMS</span><br><strong>${maxTeams} Teams</strong></div>
+                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">APPROVED</span><br><strong style="color: ${isFull ? 'var(--accent-red)' : 'var(--accent-green)'};">${approved} / ${maxTeams} ${isFull ? '(FULL)' : ''}</strong></div>
+                </div>
+
+                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">📜 Tournament Rules</h4>
+                <div style="background: rgba(0,0,0,0.4); border: 1px solid var(--border-card); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.88rem; max-height: 120px; overflow-y: auto; color: var(--text-secondary); margin-bottom: 1.5rem;">
+                    ${t.rules_text || 'Official GEN Esports Rules apply.'}
+                </div>
+
+                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">🛡️ Registered Teams (${approvedTeams.length})</h4>
+                ${teamsListHtml}
+
+                <div style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 1rem;">
+                    ${isFull ? `
+                        <button disabled class="btn btn-secondary" style="width: 100%; opacity: 0.6; cursor: not-allowed;">
+                            🛑 Registration Full
+                        </button>
+                    ` : `
+                        <button onclick="App.openDiscordInvite()" class="btn btn-discord" style="width: 100%;">
+                            💬 Register Team on Discord
+                        </button>
+                    `}
+                </div>
+            </div>
+        `);
+    },
+
+    // RENDER TEAMS VIEW
+    async renderTeamsView() {
+        const container = document.getElementById('app-content');
+        const tournaments = await Api.getTournaments();
+        let allApprovedTeams = [];
+
+        for (const t of tournaments) {
+            const teams = await Api.getApprovedTeams(t.slug);
+            allApprovedTeams = allApprovedTeams.concat(teams);
+        }
+
+        container.innerHTML = `
+            <div style="margin-bottom: 3rem;">
+                <div class="hero-badge">🛡️ VERIFIED ROSTERS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
+                    APPROVED <span class="gradient-text">TEAMS & ROSTERS</span>
+                </h1>
+                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
+                    Official team profiles and verified player rosters approved by GEN Esports administrators.
+                </p>
+            </div>
+
+            <div class="teams-grid">
+                ${allApprovedTeams.length === 0 ? `
+                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🛡️</div>
+                        <h3>No Approved Teams Yet</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Approved team rosters will automatically post here upon admin review.</p>
+                    </div>
+                ` : allApprovedTeams.map(team => {
+                    const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/64?text=GEN';
+                    const encodedTeam = encodeURIComponent(JSON.stringify(team));
+                    return `
+                        <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${encodedTeam}')">
+                            <div class="team-card-header">
+                                <img src="${logoSrc}" alt="${team.team_name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
+                                <div>
+                                    <div class="team-info-name">${team.team_name}</div>
+                                    <div class="team-info-captain">👑 Captain: ${team.captain_name}</div>
+                                </div>
+                            </div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
+                                🏆 ${team.tournament}
+                            </div>
+                            <div class="roster-grid">
+                                ${(team.roster || []).map(p => `
+                                    <div class="roster-row">
+                                        <span class="roster-role">${p.role}</span>
+                                        <span class="roster-ign">${p.ign}</span>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+        `;
+    },
+
+    showTeamProfileModal(encodedTeamJson) {
+        try {
+            const team = JSON.parse(decodeURIComponent(encodedTeamJson));
+            const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/80?text=GEN';
+
+            this.showModal(`
+                <div style="text-align: center; margin-bottom: 1.5rem;">
+                    <img src="${logoSrc}" style="width: 80px; height: 80px; border-radius: 12px; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/80?text=TEAM'">
+                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${team.team_name}</h2>
+                    <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏆 ${team.tournament}</div>
+                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">👑 Captain: ${team.captain_name}</div>
+                </div>
+
+                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">👥 Active Roster</h4>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.3); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-card);">
+                    ${(team.roster || []).map(p => `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                            <span style="font-weight: 700; color: var(--accent-cyan); font-size: 0.85rem;">${p.role}</span>
+                            <span style="font-weight: 600;">${p.ign}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `);
+        } catch (e) {
+            console.error('Failed to parse team profile JSON:', e);
+        }
+    },
+
+    // RENDER MATCHES VIEW
+    async renderMatchesView() {
+        const container = document.getElementById('app-content');
+        const matches = await Api.getMatches();
+
+        container.innerHTML = `
+            <div style="margin-bottom: 3rem;">
+                <div class="hero-badge">⚔️ TOURNAMENT SCHEDULE</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
+                    MATCH <span class="gradient-text">CENTER</span>
+                </h1>
+                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
+                    Live, upcoming, and completed match results recorded directly by tournament administrators.
+                </p>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
+                ${matches.length === 0 ? `
+                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">⚔️</div>
+                        <h3>No Matches Scheduled</h3>
+                        <p style="color: var(--text-secondary);">Matches will appear here once brackets are generated by administrators.</p>
+                    </div>
+                ` : matches.map(m => `
+                    <div class="glass-panel" style="padding: 1.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; font-size: 0.8rem; color: var(--text-muted);">
+                            <span>🏆 ${m.tournament_name || 'GEN Tournament'}</span>
+                            <span class="badge ${m.status === 'COMPLETED' ? 'badge-closed' : (m.status === 'LIVE' ? 'badge-open' : 'badge-draft')}">${m.status}</span>
+                        </div>
+                        <div style="font-size: 0.85rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.75rem;">${m.stage_name || 'Stage Match'}</div>
+
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm);">
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-weight: 600;">
+                                <span>🛡️ ${m.team1_name || 'TBD'}</span>
+                                <span style="font-family: var(--font-heading); font-size: 1.2rem; color: var(--accent-gold);">${m.team1_score ?? 0}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-weight: 600;">
+                                <span>🛡️ ${m.team2_name || 'TBD'}</span>
+                                <span style="font-family: var(--font-heading); font-size: 1.2rem; color: var(--accent-gold);">${m.team2_score ?? 0}</span>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    // RENDER BRACKETS VIEW
+    async renderBracketsView() {
+        const container = document.getElementById('app-content');
+        const tournaments = await Api.getTournaments();
+
+        if (tournaments.length > 0 && !this.activeTournamentSlug) {
+            this.activeTournamentSlug = tournaments[0].slug;
+        }
+
+        const bracketMatches = this.activeTournamentSlug ? await Api.getTournamentBracket(this.activeTournamentSlug) : [];
+
+        // Group matches by round_number
+        const roundsMap = {};
+        bracketMatches.forEach(m => {
+            const r = m.round_number || 1;
+            if (!roundsMap[r]) roundsMap[r] = [];
+            roundsMap[r].push(m);
+        });
+
+        container.innerHTML = `
+            <div style="margin-bottom: 2rem;">
+                <div class="hero-badge">🌳 INTERACTIVE BRACKETS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
+                    TOURNAMENT <span class="gradient-text">BRACKET</span>
+                </h1>
+                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
+                    Select a tournament to inspect live elimination bracket progression.
+                </p>
+            </div>
+
+            <div style="margin-bottom: 2rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                <label style="font-weight: 700; color: var(--accent-cyan);">Select Tournament:</label>
+                <select onchange="App.changeBracketTournament(this.value)" class="form-select" style="max-width: 320px;">
+                    ${tournaments.map(t => `<option value="${t.slug}" ${t.slug === this.activeTournamentSlug ? 'selected' : ''}>${t.title}</option>`).join('')}
+                </select>
+            </div>
+
+            <div class="bracket-container glass-panel">
+                ${Object.keys(roundsMap).length === 0 ? `
+                    <div style="padding: 3rem; text-align: center; width: 100%;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">🌳</div>
+                        <h3>No Bracket Generated Yet</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Bracket will be generated by administrators after registration closes.</p>
+                    </div>
+                ` : Object.keys(roundsMap).sort().map(rNum => `
+                    <div class="bracket-round">
+                        <div class="bracket-round-title">Round ${rNum}</div>
+                        ${roundsMap[rNum].map(m => `
+                            <div class="bracket-match-card">
+                                <div style="font-size: 0.75rem; color: var(--text-muted); font-weight: 700;">${m.stage_name || 'Match'}</div>
+                                <div class="bracket-team-row ${m.winner_id && m.winner_id === m.team1_id ? 'winner' : ''}">
+                                    <span>🛡️ ${m.team1_name || 'TBD'}</span>
+                                    <span class="bracket-score">${m.team1_score ?? 0}</span>
+                                </div>
+                                <div class="bracket-team-row ${m.winner_id && m.winner_id === m.team2_id ? 'winner' : ''}">
+                                    <span>🛡️ ${m.team2_name || 'TBD'}</span>
+                                    <span class="bracket-score">${m.team2_score ?? 0}</span>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    },
+
+    async changeBracketTournament(slug) {
+        this.activeTournamentSlug = slug;
+        await this.renderBracketsView();
+    },
+
+    // RENDER LEADERBOARDS VIEW
+    async renderLeaderboardsView() {
+        const container = document.getElementById('app-content');
+        const tournaments = await Api.getTournaments();
+
+        if (tournaments.length > 0 && !this.activeTournamentSlug) {
+            this.activeTournamentSlug = tournaments[0].slug;
+        }
+
+        const standings = this.activeTournamentSlug ? await Api.getTournamentStandings(this.activeTournamentSlug) : [];
+
+        container.innerHTML = `
+            <div style="margin-bottom: 2rem;">
+                <div class="hero-badge">📊 RANKINGS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
+                    TOURNAMENT <span class="gradient-text">LEADERBOARD</span>
+                </h1>
+            </div>
+
+            <div style="margin-bottom: 2rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+                <label style="font-weight: 700; color: var(--accent-cyan);">Select Tournament:</label>
+                <select onchange="App.changeLeaderboardTournament(this.value)" class="form-select" style="max-width: 320px;">
+                    ${tournaments.map(t => `<option value="${t.slug}" ${t.slug === this.activeTournamentSlug ? 'selected' : ''}>${t.title}</option>`).join('')}
+                </select>
+            </div>
+
+            <div class="data-table-wrapper glass-panel">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Rank</th>
+                            <th>Team Name</th>
+                            <th>Played</th>
+                            <th>Wins</th>
+                            <th>Losses</th>
+                            <th>Points</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${standings.length === 0 ? `
+                            <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 3rem;">No completed match data available for standings calculation yet.</td></tr>
+                        ` : standings.map((s, idx) => `
+                            <tr>
+                                <td><strong style="color: ${idx === 0 ? 'var(--accent-gold)' : 'var(--text-primary)'};">#${idx + 1}</strong></td>
+                                <td><strong>🛡️ ${s.team_name}</strong></td>
+                                <td>${s.played}</td>
+                                <td style="color: var(--accent-green); font-weight: 700;">${s.wins}</td>
+                                <td style="color: var(--accent-red);">${s.losses}</td>
+                                <td><strong style="color: var(--accent-cyan); font-size: 1.1rem;">${s.points} PTS</strong></td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    },
+
+    async changeLeaderboardTournament(slug) {
+        this.activeTournamentSlug = slug;
+        await this.renderLeaderboardsView();
+    },
+
+    // RENDER ADMIN VIEW
+    async renderAdminView() {
+        const container = document.getElementById('app-content');
+
+        if (!this.adminApiKey) {
+            container.innerHTML = `
+                <div style="max-width: 450px; margin: 4rem auto;" class="glass-panel">
+                    <div style="text-align: center; margin-bottom: 1.5rem;">
+                        <div style="font-size: 3rem; margin-bottom: 0.5rem;">🔑</div>
+                        <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">Admin Portal</h2>
+                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.25rem;">Enter your API Key to manage tournaments & approvals.</p>
+                    </div>
+
+                    <form onsubmit="App.loginAdmin(event)">
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <label>API Key</label>
+                            <input type="password" id="admin-key-input" class="form-input" placeholder="Enter X-API-Key..." required>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width: 100%;">
+                            🔓 Login to Admin Panel
+                        </button>
+                    </form>
+                </div>
+            `;
+            return;
+        }
+
+        try {
+            const stats = await Api.getAdminStats(this.adminApiKey);
+            const tournaments = await Api.getAdminTournaments(this.adminApiKey);
+
+            container.innerHTML = `
+                <div class="admin-container">
+                    <div class="admin-header">
+                        <div>
+                            <div class="hero-badge">⚙️ ADMIN CONTROL DASHBOARD</div>
+                            <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                                PLATFORM <span class="gradient-text">MANAGEMENT</span>
+                            </h1>
+                        </div>
+                        <button onclick="App.logoutAdmin()" class="btn btn-secondary" style="font-size: 0.85rem;">
+                            🔒 Logout
+                        </button>
+                    </div>
+
+                    <div class="admin-nav-tabs">
+                        <button onclick="App.switchAdminTab('overview')" class="admin-tab-btn ${this.adminTab === 'overview' ? 'active' : ''}">📊 Overview & Registrations</button>
+                        <button onclick="App.switchAdminTab('tournaments')" class="admin-tab-btn ${this.adminTab === 'tournaments' ? 'active' : ''}">🏆 Tournament Manager</button>
+                        <button onclick="App.switchAdminTab('matches')" class="admin-tab-btn ${this.adminTab === 'matches' ? 'active' : ''}">⚔️ Match & Score Input</button>
+                        <button onclick="App.switchAdminTab('audit')" class="admin-tab-btn ${this.adminTab === 'audit' ? 'active' : ''}">📜 Audit Logs</button>
+                    </div>
+
+                    <div id="admin-tab-content">
+                        <!-- Rendered dynamically based on adminTab -->
+                    </div>
+                </div>
+            `;
+
+            await this.renderAdminTabContent(stats, tournaments);
+        } catch (err) {
+            console.error('Admin login error:', err);
+            this.adminApiKey = '';
+            sessionStorage.removeItem('gen_admin_api_key');
+            alert('Invalid API Key or authorization error.');
+            await this.renderAdminView();
+        }
+    },
+
+    loginAdmin(e) {
+        e.preventDefault();
+        const input = document.getElementById('admin-key-input');
+        const key = input ? (input.value.strip ? input.value.strip() : input.value.trim()) : '';
+        if (key) {
+            this.adminApiKey = key;
+            sessionStorage.setItem('gen_admin_api_key', key);
+            this.renderAdminView();
+        }
+    },
+
+    logoutAdmin() {
+        this.adminApiKey = '';
+        sessionStorage.removeItem('gen_admin_api_key');
+        this.renderAdminView();
+    },
+
+    async switchAdminTab(tabName) {
+        this.adminTab = tabName;
+        await this.renderAdminView();
+    },
+
+    async renderAdminTabContent(stats, tournaments) {
+        const container = document.getElementById('admin-tab-content');
+        if (!container) return;
+
+        if (this.adminTab === 'overview') {
+            const pendingRegs = await Api.getAdminRegistrations(this.adminApiKey, 'PENDING');
+
+            container.innerHTML = `
+                <div class="stats-banner glass-panel" style="margin-bottom: 2rem;">
+                    <div class="stat-box"><div class="stat-val">${stats.total_tournaments ?? 0}</div><div class="stat-lbl">Total Tournaments</div></div>
+                    <div class="stat-box"><div class="stat-val" style="color: var(--accent-gold);">${stats.pending_registrations ?? 0}</div><div class="stat-lbl">Pending Approvals</div></div>
+                    <div class="stat-box"><div class="stat-val" style="color: var(--accent-green);">${stats.approved_registrations ?? 0}</div><div class="stat-lbl">Approved Teams</div></div>
+                    <div class="stat-box"><div class="stat-val">${stats.completed_matches ?? 0}</div><div class="stat-lbl">Completed Matches</div></div>
+                </div>
+
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">📋 Pending Team Registrations (${pendingRegs.length})</h3>
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.5rem;">
+                    ${pendingRegs.length === 0 ? `
+                        <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
+                            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">✅</div>
+                            <h4>No Pending Registrations</h4>
+                            <p style="color: var(--text-muted);">All team registration tickets have been reviewed.</p>
+                        </div>
+                    ` : pendingRegs.map(r => `
+                        <div class="glass-panel" style="padding: 1.5rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                                <strong style="font-size: 1.1rem; color: var(--accent-cyan);">${r.team_name || 'Team'}</strong>
+                                <span class="badge badge-draft">PENDING</span>
+                            </div>
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                🏆 <strong>Tournament:</strong> ${r.tournament_name || 'N/A'}<br>
+                                👑 <strong>Captain:</strong> ${r.captain_name || 'N/A'} (<span style="color: var(--accent-gold);">${r.captain_phone || ''}</span>)<br>
+                                🆔 <strong>Code:</strong> ${r.registration_code || r.ticket_id}
+                            </div>
+                            <div style="display: flex; gap: 0.75rem;">
+                                <button onclick="App.approveTeamAdmin(${r.ticket_id})" class="btn btn-primary" style="flex: 1; padding: 0.5rem;">✅ Approve</button>
+                                <button onclick="App.rejectTeamAdmin(${r.ticket_id})" class="btn btn-danger" style="flex: 1; padding: 0.5rem; background: var(--accent-red); color: #fff;">❌ Reject</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else if (this.adminTab === 'tournaments') {
+            container.innerHTML = `
+                <div class="glass-panel" style="padding: 2rem; margin-bottom: 2.5rem;">
+                    <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1.25rem;">➕ Create New Tournament</h3>
+                    <form onsubmit="App.handleCreateTournament(event)">
+                        <div class="form-grid">
+                            <div class="form-group"><label>Tournament Name</label><input type="text" id="t-title" class="form-input" placeholder="e.g. GEN Valorant Masters" required></div>
+                            <div class="form-group"><label>Game</label><input type="text" id="t-game" class="form-input" placeholder="VALORANT / PUBG MOBILE / CS2 / League of Legends" required></div>
+                            <div class="form-group"><label>Prize Pool</label><input type="text" id="t-prize" class="form-input" placeholder="$500 USD / 50,000 BDT"></div>
+                            <div class="form-group"><label>Maximum Teams</label><input type="number" id="t-max" class="form-input" value="16" min="2" max="128" required></div>
+                            <div class="form-group"><label>Format</label><select id="t-format" class="form-select"><option value="Single Elimination">Single Elimination</option><option value="Double Elimination">Double Elimination</option><option value="Round Robin">Round Robin</option></select></div>
+                            <div class="form-group"><label>Initial Status</label><select id="t-status" class="form-select"><option value="REGISTRATION_OPEN">🟢 REGISTRATION OPEN</option><option value="DRAFT">⏸️ DRAFT</option><option value="REGISTRATION_CLOSED">🔴 REGISTRATION CLOSED</option><option value="ONGOING">🔵 ONGOING</option><option value="COMPLETED">🏆 COMPLETED</option></select></div>
+                            <div class="form-group"><label>Registration Start</label><input type="datetime-local" id="t-reg-start" class="form-input"></div>
+                            <div class="form-group"><label>Registration Deadline</label><input type="datetime-local" id="t-reg-deadline" class="form-input"></div>
+                            <div class="form-group"><label>Tournament Start</label><input type="datetime-local" id="t-start" class="form-input"></div>
+                            <div class="form-group"><label>Tournament End</label><input type="datetime-local" id="t-end" class="form-input"></div>
+                        </div>
+                        <div class="form-group" style="margin-top: 1rem;"><label>Description</label><textarea id="t-desc" class="form-textarea" rows="2" placeholder="Brief tournament summary..."></textarea></div>
+                        <div class="form-group" style="margin-top: 1rem;"><label>Rules & Guidelines</label><textarea id="t-rules" class="form-textarea" rows="3" placeholder="Full tournament rules text..."></textarea></div>
+                        <button type="submit" class="btn btn-primary" style="margin-top: 1.25rem;">✨ Create Tournament</button>
+                    </form>
+                </div>
+
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">🏆 Active Database Tournaments</h3>
+                <div class="data-table-wrapper glass-panel">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>ID</th><th>Name</th><th>Game</th><th>Reg Status</th><th>Main Status</th><th>Teams</th><th>Quick Actions</th></tr>
+                        </thead>
+                        <tbody>
+                            ${tournaments.map(t => {
+                                const approved = t.current_approved_team_count || 0;
+                                const maxT = t.max_teams || 16;
+                                const isFull = approved >= maxT || t.registration_status === 'FULL';
+                                return `
+                                    <tr>
+                                        <td>#${t.tournament_id}</td>
+                                        <td><strong>${t.title}</strong></td>
+                                        <td><span style="color: var(--accent-cyan); font-weight: 700;">${t.game_type}</span></td>
+                                        <td><span class="badge ${isFull ? 'badge-closed' : (t.registration_status === 'OPEN' ? 'badge-open' : 'badge-closed')}">${isFull ? 'FULL' : t.registration_status}</span></td>
+                                        <td><span class="badge badge-ongoing">${t.status}</span></td>
+                                        <td><strong>${approved} / ${maxT}</strong></td>
+                                        <td style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                                            <button onclick="App.handleOpenRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Open Registration">🟢 Open</button>
+                                            <button onclick="App.handleCloseRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Close Registration">🔴 Close</button>
+                                            <select onchange="App.handleSetStatus(${t.tournament_id}, this.value)" class="form-select" style="padding: 0.25rem; font-size: 0.75rem; width: auto;">
+                                                <option value="" disabled selected>Status...</option>
+                                                <option value="DRAFT">DRAFT</option>
+                                                <option value="REGISTRATION_OPEN">REG OPEN</option>
+                                                <option value="REGISTRATION_CLOSED">REG CLOSED</option>
+                                                <option value="ONGOING">ONGOING</option>
+                                                <option value="COMPLETED">COMPLETED</option>
+                                                <option value="CANCELLED">CANCELLED</option>
+                                            </select>
+                                            <button onclick="App.handleGenerateBracket('${t.tournament_id}')" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">🌳 Bracket</button>
+                                            <button onclick="App.handleCancelTournament(${t.tournament_id})" class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-red); color:#fff;">❌ Cancel</button>
+                                        </td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } else if (this.adminTab === 'matches') {
+            const matches = await Api.getMatches();
+
+            container.innerHTML = `
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">⚔️ Update Match Scores</h3>
+                <div class="data-table-wrapper glass-panel">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Match ID</th><th>Tournament</th><th>Stage</th><th>Team 1</th><th>Team 2</th><th>Score</th><th>Action</th></tr>
+                        </thead>
+                        <tbody>
+                            ${matches.length === 0 ? `
+                                <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">No matches scheduled. Generate a bracket first.</td></tr>
+                            ` : matches.map(m => `
+                                <tr>
+                                    <td>#${m.match_id}</td>
+                                    <td>${m.tournament_name || 'N/A'}</td>
+                                    <td>${m.stage_name}</td>
+                                    <td>🛡️ ${m.team1_name || 'TBD'}</td>
+                                    <td>🛡️ ${m.team2_name || 'TBD'}</td>
+                                    <td><strong>${m.team1_score ?? 0} - ${m.team2_score ?? 0}</strong></td>
+                                    <td>
+                                        <button onclick="App.showScoreInputModal(${m.match_id}, '${m.team1_name || 'Team 1'}', '${m.team2_name || 'Team 2'}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">✏️ Update Score</button>
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        } else if (this.adminTab === 'audit') {
+            const logs = await Api.getAuditLogs(this.adminApiKey);
+
+            container.innerHTML = `
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">📜 Admin Action Audit Logs (${logs.length})</h3>
+                <div class="data-table-wrapper glass-panel">
+                    <table class="data-table">
+                        <thead>
+                            <tr><th>Log ID</th><th>Timestamp</th><th>Admin</th><th>Action</th><th>Tournament</th><th>Details</th></tr>
+                        </thead>
+                        <tbody>
+                            ${logs.length === 0 ? `
+                                <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 2rem;">No audit logs recorded yet.</td></tr>
+                            ` : logs.map(l => `
+                                <tr>
+                                    <td>#${l.log_id}</td>
+                                    <td style="font-size: 0.8rem; color: var(--text-muted);">${l.timestamp}</td>
+                                    <td><strong style="color: var(--accent-gold);">${l.admin_id}</strong></td>
+                                    <td><span class="badge badge-ongoing">${l.action}</span></td>
+                                    <td>${l.tournament_name || (l.tournament_id ? `#${l.tournament_id}` : '-')}</td>
+                                    <td style="font-size: 0.85rem; color: var(--text-secondary);">${l.details || '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+    },
+
+    async approveTeamAdmin(ticketId) {
+        try {
+            await Api.approveRegistration(this.adminApiKey, ticketId);
+            alert('Registration approved successfully!');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error approving registration: ' + err.message);
+        }
+    },
+
+    async rejectTeamAdmin(ticketId) {
+        const reason = prompt('Enter rejection reason:');
+        if (!reason) return;
+        try {
+            await Api.rejectRegistration(this.adminApiKey, ticketId, reason);
+            alert('Registration rejected successfully!');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error rejecting registration: ' + err.message);
+        }
+    },
+
+    async handleCreateTournament(e) {
+        e.preventDefault();
+        const title = document.getElementById('t-title').value;
+        const game_type = document.getElementById('t-game').value;
+        const prize_info = document.getElementById('t-prize').value;
+        const max_teams = parseInt(document.getElementById('t-max').value || '16', 10);
+        const format = document.getElementById('t-format').value;
+        const status = document.getElementById('t-status').value;
+        const registration_start = document.getElementById('t-reg-start').value;
+        const registration_deadline = document.getElementById('t-reg-deadline').value;
+        const tournament_start = document.getElementById('t-start').value;
+        const tournament_end = document.getElementById('t-end').value;
+        const description = document.getElementById('t-desc').value;
+        const rules_text = document.getElementById('t-rules').value;
+
+        const registration_status = status === 'REGISTRATION_OPEN' ? 'OPEN' : 'CLOSED';
+
+        try {
+            await Api.createTournament(this.adminApiKey, {
+                title, game_type, prize_info, max_teams, format, status,
+                registration_status, registration_start, registration_deadline,
+                tournament_start, tournament_end, description, rules_text
+            });
+            alert('Tournament created! If status is OPEN, it is now live in Discord registration.');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Failed to create tournament: ' + err.message);
+        }
+    },
+
+    async handleOpenRegistration(id) {
+        try {
+            await Api.openRegistration(this.adminApiKey, id);
+            alert('Registration opened! Tournament is now active in Discord dropdown.');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error opening registration: ' + err.message);
+        }
+    },
+
+    async handleCloseRegistration(id) {
+        try {
+            await Api.closeRegistration(this.adminApiKey, id);
+            alert('Registration closed.');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error closing registration: ' + err.message);
+        }
+    },
+
+    async handleSetStatus(id, newStatus) {
+        if (!newStatus) return;
+        try {
+            await Api.setTournamentStatus(this.adminApiKey, id, newStatus);
+            alert(`Tournament status updated to ${newStatus}.`);
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error changing status: ' + err.message);
+        }
+    },
+
+    async handleCancelTournament(id) {
+        if (!confirm('Are you sure you want to cancel this tournament?')) return;
+        try {
+            await Api.cancelTournament(this.adminApiKey, id);
+            alert('Tournament cancelled.');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error cancelling tournament: ' + err.message);
+        }
+    },
+
+    async handleGenerateBracket(id) {
+        try {
+            await Api.generateBracket(this.adminApiKey, id);
+            alert('Tournament bracket generated successfully!');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error generating bracket: ' + err.message);
+        }
+    },
+
+    showScoreInputModal(matchId, t1Name, t2Name) {
+        this.showModal(`
+            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem;">✏️ Enter Match Score</h3>
+            <form onsubmit="App.handleSaveMatchScore(event, ${matchId})">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+                    <div class="form-group">
+                        <label>${t1Name} Score</label>
+                        <input type="number" id="m-score1" class="form-input" value="0" min="0" required>
+                    </div>
+                    <div class="form-group">
+                        <label>${t2Name} Score</label>
+                        <input type="number" id="m-score2" class="form-input" value="0" min="0" required>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">💾 Save Match Result</button>
+            </form>
+        `);
+    },
+
+    async handleSaveMatchScore(e, matchId) {
+        e.preventDefault();
+        const score1 = parseInt(document.getElementById('m-score1').value || '0', 10);
+        const score2 = parseInt(document.getElementById('m-score2').value || '0', 10);
+
+        try {
+            await Api.submitMatchResult(this.adminApiKey, matchId, {
+                team1_score: score1,
+                team2_score: score2,
+                status: 'COMPLETED'
+            });
+            this.hideModal();
+            alert('Match score recorded and winner advanced!');
+            await this.renderAdminView();
+        } catch (err) {
+            alert('Error recording score: ' + err.message);
+        }
     }
 };
 
