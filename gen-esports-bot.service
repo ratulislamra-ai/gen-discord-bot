@@ -1,0 +1,23 @@
+[Unit]
+Description=GEN Esports Discord Tournament Registration Bot & API Service
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/gen-discord-bot
+ExecStart=/home/ubuntu/gen-discord-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/ubuntu/gen-discord-bot/.env
+
+# Output & Logging to systemd journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gen-esports-bot
+
+# Security Hardening (Optional)
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

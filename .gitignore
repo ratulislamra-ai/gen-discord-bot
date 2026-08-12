@@ -1,0 +1,29 @@
+# Environment & Secret variables
+.env
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# SQLite Databases, Backups & Uploads
+*.db
+*.sqlite3
+backups/
+uploads/
+
+# IDE & Editor files
+.vscode/
+.idea/
+.project
+.pydevproject
+
+# System files
+.DS_Store
+Thumbs.db
