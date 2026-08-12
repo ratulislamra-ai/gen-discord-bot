@@ -199,12 +199,31 @@ class MatchControlView(discord.ui.View):
         else:
             await interaction.followup.send(f"✅ Check-in recorded for **Match #{user_match.get('public_match_id') or user_match['match_id']}**. Awaiting opponent check-in.", ephemeral=True)
 
-    @discord.ui.button(label="Lobby Info", style=discord.ButtonStyle.primary, emoji="🎮", custom_id="match_ctrl_lobby")
-    async def lobby_info_button(self, interaction: discord.Interaction, button: discord.ui.Button = None):
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
+async def handle_match_info_logic(interaction: discord.Interaction, match_id: Optional[int] = None):
+    """Business logic for fetching and displaying match and lobby information."""
+    if not interaction.response.is_done():
+        await interaction.response.defer(ephemeral=True)
 
-        try:
+    try:
+        if match_id:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT m.*, t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+                    FROM matches m
+                    LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                    LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                    LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+                    WHERE m.match_id = ?;
+                """, (match_id,))
+                row = cursor.fetchone()
+
+            if not row:
+                await interaction.followup.send(f"❌ Match #{match_id} does not exist in database.", ephemeral=True)
+                return
+
+            target_m = dict(row)
+        else:
             user_regs = await get_user_all_registrations(str(interaction.user.id))
             team_names = [r["team_name"] for r in user_regs] if user_regs else []
 
@@ -230,34 +249,145 @@ class MatchControlView(discord.ui.View):
             if not target_m and matches:
                 target_m = matches[0]
 
-            if not target_m:
-                await interaction.followup.send("ℹ️ No active tournament matches found.", ephemeral=True)
-                return
+        if not target_m:
+            await interaction.followup.send("ℹ️ No active tournament matches found.", ephemeral=True)
+            return
 
-            pm_id = target_m.get("public_match_id") or f"GEN-M-{target_m['match_id']:06d}"
-            t1_name = target_m.get("team1_name") or "Team A"
-            t2_name = target_m.get("team2_name") or "Team B"
-            tr_title = target_m.get("tournament_name") or "GEN Esports Championship"
-            stage = target_m.get("stage_name") or "Round 1"
-            m_status = target_m.get("status") or "SCHEDULED"
+        pm_id = target_m.get("public_match_id") or f"GEN-M-{target_m['match_id']:06d}"
+        t1_name = target_m.get("team1_name") or "Team A"
+        t2_name = target_m.get("team2_name") or "Team B"
+        tr_title = target_m.get("tournament_name") or "GEN Esports Championship"
+        stage = target_m.get("stage_name") or "Round 1"
+        m_status = target_m.get("status") or "SCHEDULED"
 
-            embed = discord.Embed(
-                title=f"🎮 Match #{target_m['match_id']} ({pm_id}) Details",
-                description=f"**Tournament:** `{tr_title}`\n**Stage:** `{stage}`\n**Status:** `{m_status}`\n\n**{t1_name}**  VS  **{t2_name}**",
-                color=discord.Color.blue()
-            )
-            embed.add_field(name="Team 1", value=f"**{t1_name}**", inline=True)
-            embed.add_field(name="Team 2", value=f"**{t2_name}**", inline=True)
-            embed.add_field(name="Match ID", value=f"`#{target_m['match_id']}`", inline=True)
-            embed.add_field(name="Lobby Name", value=f"`{target_m.get('lobby_name') or 'GEN-LOBBY-' + str(target_m['match_id'])}`", inline=True)
-            embed.add_field(name="Lobby Code", value=f"`{target_m.get('lobby_code') or 'GEN123'}`", inline=True)
-            embed.add_field(name="Lobby Password", value=f"`{target_m.get('lobby_password') or 'GEN2026'}`", inline=True)
-            embed.set_footer(text="Confidential • GEN Esports Competitive Integrity System")
+        embed = discord.Embed(
+            title=f"🎮 Match #{target_m['match_id']} ({pm_id}) Details",
+            description=f"**Tournament:** `{tr_title}`\n**Stage:** `{stage}`\n**Status:** `{m_status}`\n\n**{t1_name}**  VS  **{t2_name}**",
+            color=discord.Color.blue()
+        )
+        embed.add_field(name="Team 1", value=f"**{t1_name}**", inline=True)
+        embed.add_field(name="Team 2", value=f"**{t2_name}**", inline=True)
+        embed.add_field(name="Match ID", value=f"`#{target_m['match_id']}`", inline=True)
+        embed.add_field(name="Lobby Name", value=f"`{target_m.get('lobby_name') or 'GEN-LOBBY-' + str(target_m['match_id'])}`", inline=True)
+        embed.add_field(name="Lobby Code", value=f"`{target_m.get('lobby_code') or 'GEN123'}`", inline=True)
+        embed.add_field(name="Lobby Password", value=f"`{target_m.get('lobby_password') or 'GEN2026'}`", inline=True)
+        embed.set_footer(text="Confidential • GEN Esports Competitive Integrity System")
 
-            await interaction.followup.send(embed=embed, ephemeral=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+    except Exception as e:
+        logger.error(f"Error displaying match details: {e}", exc_info=True)
+        await interaction.followup.send(f"❌ Error displaying match details: {str(e)}", ephemeral=True)
+
+class MatchControlView(discord.ui.View):
+    """Persistent View for Discord Match Channels & Rooms."""
+    def __init__(self, match_id: str = ""):
+        super().__init__(timeout=None)
+        self.match_id = match_id
+
+    @discord.ui.button(label="JOIN MY TEAM", style=discord.ButtonStyle.secondary, emoji="👥", custom_id="match_ctrl_join_team")
+    async def join_team_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        user_id = str(interaction.user.id)
+        user_regs = await get_user_all_registrations(user_id)
+        if not user_regs:
+            await interaction.followup.send("❌ You are not a participant in this match.", ephemeral=True)
+            return
+
+        team_names = [r["team_name"] for r in user_regs]
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.*, t1.name as team1_name, t2.name as team2_name, t1.team_id as t1_id, t2.team_id as t2_id
+                FROM matches m
+                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                WHERE m.status IN ('SCHEDULED', 'CHECK_IN_OPEN', 'READY', 'IN_PROGRESS')
+                ORDER BY m.match_id DESC LIMIT 10;
+            """)
+            matches = [dict(r) for r in cursor.fetchall()]
+
+        target_m = None
+        assigned_team = ""
+        assigned_team_id = 0
+        for m in matches:
+            if m.get("team1_name") in team_names:
+                target_m = m
+                assigned_team = m["team1_name"]
+                assigned_team_id = m["t1_id"]
+                break
+            elif m.get("team2_name") in team_names:
+                target_m = m
+                assigned_team = m["team2_name"]
+                assigned_team_id = m["t2_id"]
+                break
+
+        if not target_m:
+            await interaction.followup.send("❌ You are not a participant in this match.", ephemeral=True)
+            return
+
+        try:
+            ch = interaction.channel
+            if isinstance(ch, discord.TextChannel):
+                po = discord.PermissionOverwrite(read_messages=True, send_messages=True, connect=True, speak=True)
+                await ch.set_permissions(interaction.user, overwrite=po)
         except Exception as e:
-            logger.error(f"Error in lobby_info_button: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ Error fetching match info: {str(e)}", ephemeral=True)
+            logger.warning(f"Could not apply channel permission overwrite for user {user_id}: {e}")
+
+        embed = discord.Embed(
+            title="👥 Team Access Verified!",
+            description=f"Welcome {interaction.user.mention}! You are verified as a player for **{assigned_team}** in **Match #{target_m.get('public_match_id') or target_m['match_id']}**.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Match Status", value=f"`{target_m.get('status')}`", inline=True)
+        embed.add_field(name="Stage", value=f"`{target_m.get('stage_name', 'Tournament Round')}`", inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Check In", style=discord.ButtonStyle.success, emoji="🎟️", custom_id="match_ctrl_checkin")
+    async def check_in_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        user_regs = await get_user_all_registrations(str(interaction.user.id))
+        if not user_regs:
+            await interaction.followup.send("❌ You must be registered in a team to check in for matches.", ephemeral=True)
+            return
+
+        team_names = [r["team_name"] for r in user_regs]
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.*, t1.name as team1_name, t2.name as team2_name 
+                FROM matches m
+                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                WHERE m.status IN ('SCHEDULED', 'CHECK_IN_OPEN')
+                ORDER BY m.match_id DESC LIMIT 10;
+            """)
+            active_matches = [dict(r) for r in cursor.fetchall()]
+
+        user_match = None
+        user_team_id = None
+        for m in active_matches:
+            if m.get("team1_name") in team_names:
+                user_match = m
+                user_team_id = m["team1_id"]
+                break
+            elif m.get("team2_name") in team_names:
+                user_match = m
+                user_team_id = m["team2_id"]
+                break
+
+        if not user_match:
+            await interaction.followup.send("❌ No active match check-in open for your registered team(s).", ephemeral=True)
+            return
+
+        updated_match = await process_match_check_in(user_match["match_id"], user_team_id)
+        if updated_match and updated_match.get("status") == "READY":
+            await interaction.followup.send("✅ Check-in processed! **BOTH TEAMS ARE CHECKED IN — MATCH IS READY!** 🏆", ephemeral=False)
+        else:
+            await interaction.followup.send(f"✅ Check-in recorded for **Match #{user_match.get('public_match_id') or user_match['match_id']}**. Awaiting opponent check-in.", ephemeral=True)
+
+    @discord.ui.button(label="Lobby Info", style=discord.ButtonStyle.primary, emoji="🎮", custom_id="match_ctrl_lobby")
+    async def lobby_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await handle_match_info_logic(interaction)
 
     @discord.ui.button(label="Map Veto", style=discord.ButtonStyle.primary, emoji="🗺️", custom_id="match_ctrl_veto")
     async def map_veto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -326,61 +456,13 @@ class MatchesCog(commands.Cog):
     async def match_checkin_cmd(self, interaction: discord.Interaction):
         """Slash command for team check-in."""
         view = MatchControlView()
-        await view.check_in_button(interaction, None)
+        await view.check_in_button.callback(interaction)
 
     @app_commands.command(name="match-info", description="View confidential lobby and match details for your match.")
     @app_commands.describe(match_id="Optional specific Match ID to view")
     async def match_info_cmd(self, interaction: discord.Interaction, match_id: Optional[int] = None):
         """Slash command to view match details."""
-        if not interaction.response.is_done():
-            await interaction.response.defer(ephemeral=True)
-
-        try:
-            if match_id:
-                with _get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT m.*, t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
-                        FROM matches m
-                        LEFT JOIN teams t1 ON m.team1_id = t1.team_id
-                        LEFT JOIN teams t2 ON m.team2_id = t2.team_id
-                        LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
-                        WHERE m.match_id = ?;
-                    """, (match_id,))
-                    row = cursor.fetchone()
-
-                if not row:
-                    await interaction.followup.send(f"❌ Match #{match_id} does not exist in database.", ephemeral=True)
-                    return
-
-                m = dict(row)
-                pm_id = m.get("public_match_id") or f"GEN-M-{m['match_id']:06d}"
-                t1_name = m.get("team1_name") or "TBD"
-                t2_name = m.get("team2_name") or "TBD"
-                tr_title = m.get("tournament_name") or "GEN Esports Championship"
-                stage = m.get("stage_name") or "Round 1"
-                m_status = m.get("status") or "SCHEDULED"
-
-                embed = discord.Embed(
-                    title=f"🎮 Match #{m['match_id']} ({pm_id}) Details",
-                    description=f"**Tournament:** `{tr_title}`\n**Stage:** `{stage}`\n**Status:** `{m_status}`\n\n**{t1_name}**  VS  **{t2_name}**",
-                    color=discord.Color.blue()
-                )
-                embed.add_field(name="Team 1", value=f"**{t1_name}**", inline=True)
-                embed.add_field(name="Team 2", value=f"**{t2_name}**", inline=True)
-                embed.add_field(name="Match ID", value=f"`#{m['match_id']}`", inline=True)
-                embed.add_field(name="Lobby Name", value=f"`{m.get('lobby_name') or 'GEN-LOBBY-' + str(m['match_id'])}`", inline=True)
-                embed.add_field(name="Lobby Code", value=f"`{m.get('lobby_code') or 'GEN123'}`", inline=True)
-                embed.add_field(name="Lobby Password", value=f"`{m.get('lobby_password') or 'GEN2026'}`", inline=True)
-                embed.set_footer(text="Confidential • GEN Esports Competitive Integrity System")
-
-                await interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                view = MatchControlView()
-                await view.lobby_info_button(interaction, None)
-        except Exception as e:
-            logger.error(f"Error in match_info_cmd: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ Error displaying match details: {str(e)}", ephemeral=True)
+        await handle_match_info_logic(interaction, match_id)
 
     @app_commands.command(name="submit-score", description="Submit final match scores and screenshot evidence.")
     async def submit_score_cmd(self, interaction: discord.Interaction):
