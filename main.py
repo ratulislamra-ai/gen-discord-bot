@@ -78,7 +78,8 @@ class GENBot(commands.Bot):
                 await self.load_extension(cog)
                 logger.info(f"Loaded extension cog: {cog}")
             except Exception as e:
-                logger.error(f"Failed to load extension cog {cog}: {e}")
+                logger.error(f"CRITICAL: Failed to load extension cog '{cog}': {e}", exc_info=True)
+                raise RuntimeError(f"Failed to load required extension cog '{cog}': {e}") from e
 
         # 4. Verify command tree registration
         tree_commands = [cmd.name for cmd in self.tree.get_commands()]

@@ -16,6 +16,10 @@ GUILD_ID = int(GUILD_ID_RAW) if GUILD_ID_RAW and GUILD_ID_RAW.strip().isdigit() 
 BOT_OWNER_ID_RAW = os.getenv("BOT_OWNER_ID")
 BOT_OWNER_ID = int(BOT_OWNER_ID_RAW) if BOT_OWNER_ID_RAW and BOT_OWNER_ID_RAW.strip().isdigit() else None
 
+# Configurable Staff Role ID for support ticket permissions
+STAFF_ROLE_ID_RAW = os.getenv("STAFF_ROLE_ID")
+STAFF_ROLE_ID = int(STAFF_ROLE_ID_RAW) if STAFF_ROLE_ID_RAW and STAFF_ROLE_ID_RAW.strip().isdigit() else None
+
 # Website Integration API Configuration
 GEN_API_KEY = os.getenv("GEN_API_KEY", "")
 CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
