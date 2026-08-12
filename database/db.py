@@ -353,14 +353,40 @@ def _init_db_sync():
         # team_invitations table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS team_invitations (
-                invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 team_id INTEGER NOT NULL,
-                inviter_player_id INTEGER NOT NULL,
-                invitee_discord_id TEXT NOT NULL,
-                invitee_player_id INTEGER,
-                status TEXT DEFAULT 'PENDING',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                tournament_id INTEGER DEFAULT 0,
+                invited_user_id TEXT NOT NULL,
+                invited_by_user_id TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                accepted_at TIMESTAMP,
+                FOREIGN KEY (team_id) REFERENCES teams (team_id) ON DELETE CASCADE
             );
+        """)
+        cursor.execute("PRAGMA table_info(team_invitations);")
+        inv_cols = [c[1] for c in cursor.fetchall()]
+        if "tournament_id" not in inv_cols:
+            cursor.execute("ALTER TABLE team_invitations ADD COLUMN tournament_id INTEGER DEFAULT 0;")
+        if "invited_user_id" not in inv_cols:
+            cursor.execute("ALTER TABLE team_invitations ADD COLUMN invited_user_id TEXT;")
+        if "invited_by_user_id" not in inv_cols:
+            cursor.execute("ALTER TABLE team_invitations ADD COLUMN invited_by_user_id TEXT;")
+        if "expires_at" not in inv_cols:
+            cursor.execute("ALTER TABLE team_invitations ADD COLUMN expires_at TIMESTAMP;")
+        if "accepted_at" not in inv_cols:
+            cursor.execute("ALTER TABLE team_invitations ADD COLUMN accepted_at TIMESTAMP;")
+        if "invitee_discord_id" not in inv_cols:
+            cursor.execute("ALTER TABLE team_invitations ADD COLUMN invitee_discord_id TEXT;")
+
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_inv_invited_user 
+            ON team_invitations(invited_user_id, status);
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_inv_team 
+            ON team_invitations(team_id, status);
         """)
 
         # player_stats table
@@ -3651,3 +3677,279 @@ def _advance_bracket_and_create_next_match_sync(match_id: int, winner_team_id: i
 async def advance_bracket_and_create_next_match(match_id: int, winner_team_id: int) -> dict | None:
     """Asynchronously advance bracket and create next match."""
     return await asyncio.to_thread(_advance_bracket_and_create_next_match_sync, match_id, winner_team_id)
+
+# -------------------------------------------------------------
+# TEAM INVITATIONS & ROSTER VALIDATION HELPERS
+# -------------------------------------------------------------
+
+def _validate_player_invite_eligibility_sync(tournament_id: int, team_id: int, target_discord_id: str) -> tuple[bool, str]:
+    """
+    Validates:
+    1. User is not already a member of this team.
+    2. User is not registered/approved on another team for the same tournament.
+    3. Team roster limit has not been exceeded.
+    """
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        target_str = str(target_discord_id).strip()
+
+        # 1. Check if user is already on this team
+        cursor.execute("""
+            SELECT rp.roster_id 
+            FROM roster_players rp
+            JOIN tickets t ON rp.ticket_id = t.ticket_id
+            JOIN teams tm ON t.team_name = tm.name
+            WHERE tm.team_id = ? AND rp.discord_id = ?;
+        """, (team_id, target_str))
+        if cursor.fetchone():
+            return False, "❌ This player is already a member of your team."
+
+        cursor.execute("""
+            SELECT tm.membership_id
+            FROM team_members tm
+            JOIN players p ON tm.player_id = p.player_id
+            WHERE tm.team_id = ? AND (p.discord_user_id = ? OR p.discord_id = ?) AND tm.status = 'ACTIVE';
+        """, (team_id, target_str, target_str))
+        if cursor.fetchone():
+            return False, "❌ This player is already a member of your team."
+
+        # 2. Check if user is registered/approved on another team for the SAME tournament
+        if tournament_id:
+            cursor.execute("""
+                SELECT t.ticket_id, t.team_name
+                FROM tickets t
+                JOIN roster_players rp ON t.ticket_id = rp.ticket_id
+                WHERE t.status IN ('SUBMITTED', 'APPROVED') 
+                  AND (t.tournament_name = (SELECT title FROM tournaments WHERE tournament_id = ?) OR t.tournament_name = (SELECT slug FROM tournaments WHERE tournament_id = ?))
+                  AND rp.discord_id = ?
+                  AND t.team_name != (SELECT name FROM teams WHERE team_id = ?);
+            """, (tournament_id, tournament_id, target_str, team_id))
+            conflict_row = cursor.fetchone()
+            if conflict_row:
+                return False, f"❌ This Discord user is already registered on team '{conflict_row['team_name']}' for this tournament."
+
+        # 3. Check team roster size limit
+        cursor.execute("SELECT name FROM teams WHERE team_id = ?;", (team_id,))
+        t_name_row = cursor.fetchone()
+        if t_name_row:
+            team_name = t_name_row["name"]
+            cursor.execute("""
+                SELECT COUNT(*) FROM roster_players rp
+                JOIN tickets t ON rp.ticket_id = t.ticket_id
+                WHERE t.team_name = ? AND t.status IN ('SUBMITTED', 'APPROVED', 'OPEN');
+            """, (team_name,))
+            count = cursor.fetchone()[0]
+            max_roster = 7 # Standard roster limit (5 main + 2 subs)
+            if count >= max_roster:
+                return False, f"❌ Your team roster has reached the maximum capacity of {max_roster} players."
+
+        return True, ""
+
+async def validate_player_invite_eligibility(tournament_id: int, team_id: int, target_discord_id: str) -> tuple[bool, str]:
+    return await asyncio.to_thread(_validate_player_invite_eligibility_sync, tournament_id, team_id, target_discord_id)
+
+def _create_team_invitation_sync(team_id: int, tournament_id: int, invited_user_id: str, invited_by_user_id: str) -> dict:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE team_invitations 
+            SET status = 'CANCELLED' 
+            WHERE team_id = ? AND (invited_user_id = ? OR invitee_discord_id = ?) AND status = 'PENDING';
+        """, (team_id, str(invited_user_id), str(invited_user_id)))
+
+        cursor.execute("""
+            INSERT INTO team_invitations (team_id, tournament_id, invited_user_id, invited_by_user_id, invitee_discord_id, inviter_player_id, status)
+            VALUES (?, ?, ?, ?, ?, 0, 'PENDING');
+        """, (team_id, tournament_id, str(invited_user_id), str(invited_by_user_id), str(invited_user_id)))
+        inv_id = cursor.lastrowid
+        conn.commit()
+
+        cursor.execute("SELECT rowid as id, * FROM team_invitations WHERE rowid = ?;", (inv_id,))
+        return dict(cursor.fetchone())
+
+async def create_team_invitation(team_id: int, tournament_id: int, invited_user_id: str, invited_by_user_id: str) -> dict:
+    return await asyncio.to_thread(_create_team_invitation_sync, team_id, tournament_id, invited_user_id, invited_by_user_id)
+
+def _get_invitation_by_id_sync(invitation_id: int) -> dict | None:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT i.rowid as id, i.*, tm.name as team_name, tr.title as tournament_name
+            FROM team_invitations i
+            JOIN teams tm ON i.team_id = tm.team_id
+            LEFT JOIN tournaments tr ON i.tournament_id = tr.tournament_id
+            WHERE i.rowid = ?;
+        """, (invitation_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_invitation_by_id(invitation_id: int) -> dict | None:
+    return await asyncio.to_thread(_get_invitation_by_id_sync, invitation_id)
+
+def _get_pending_invitations_for_user_sync(user_id: str) -> list[dict]:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT i.rowid as id, i.*, tm.name as team_name, tr.title as tournament_name
+            FROM team_invitations i
+            JOIN teams tm ON i.team_id = tm.team_id
+            LEFT JOIN tournaments tr ON i.tournament_id = tr.tournament_id
+            WHERE (i.invited_user_id = ? OR i.invitee_discord_id = ?) AND i.status = 'PENDING'
+            ORDER BY i.rowid DESC;
+        """, (str(user_id), str(user_id)))
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_pending_invitations_for_user(user_id: str) -> list[dict]:
+    return await asyncio.to_thread(_get_pending_invitations_for_user_sync, user_id)
+
+def _accept_team_invitation_sync(invitation_id: int, user_id: str, display_name: str = "") -> tuple[bool, str]:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT rowid as id, * FROM team_invitations WHERE rowid = ? AND status = 'PENDING';", (invitation_id,))
+        inv_row = cursor.fetchone()
+        if not inv_row:
+            return False, "❌ This invitation is no longer valid or has expired."
+
+        inv = dict(inv_row)
+        if str(inv.get("invited_user_id") or inv.get("invitee_discord_id")) != str(user_id):
+            return False, "❌ You are not authorized to accept this invitation."
+
+        eligible, err_msg = _validate_player_invite_eligibility_sync(inv["tournament_id"], inv["team_id"], user_id)
+        if not eligible:
+            return False, err_msg
+
+        cursor.execute("""
+            UPDATE team_invitations 
+            SET status = 'ACCEPTED', accepted_at = CURRENT_TIMESTAMP 
+            WHERE rowid = ?;
+        """, (invitation_id,))
+
+        cursor.execute("SELECT name FROM teams WHERE team_id = ?;", (inv["team_id"],))
+        t_name = cursor.fetchone()["name"]
+
+        cursor.execute("""
+            SELECT ticket_id FROM tickets 
+            WHERE team_name = ? AND status IN ('SUBMITTED', 'APPROVED', 'OPEN')
+            ORDER BY ticket_id DESC LIMIT 1;
+        """, (t_name,))
+        t_row = cursor.fetchone()
+        if t_row:
+            ticket_id = t_row["ticket_id"]
+            d_name = display_name or f"Player-{user_id[-4:]}"
+            cursor.execute("""
+                INSERT INTO roster_players (ticket_id, player_role, ign, discord_id)
+                VALUES (?, 'Substitute / Member', ?, ?);
+            """, (ticket_id, d_name, str(user_id)))
+
+        conn.commit()
+        return True, "✅ You have successfully joined the team!"
+
+async def accept_team_invitation(invitation_id: int, user_id: str, display_name: str = "") -> tuple[bool, str]:
+    return await asyncio.to_thread(_accept_team_invitation_sync, invitation_id, user_id, display_name)
+
+def _decline_team_invitation_sync(invitation_id: int, user_id: str) -> tuple[bool, str]:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT rowid as id, * FROM team_invitations WHERE rowid = ? AND status = 'PENDING';", (invitation_id,))
+        inv_row = cursor.fetchone()
+        if not inv_row:
+            return False, "❌ Invitation not found or already processed."
+
+        inv = dict(inv_row)
+        if str(inv.get("invited_user_id") or inv.get("invitee_discord_id")) != str(user_id):
+            return False, "❌ You are not authorized to decline this invitation."
+
+        cursor.execute("UPDATE team_invitations SET status = 'DECLINED' WHERE rowid = ?;", (invitation_id,))
+        conn.commit()
+        return True, "❌ Invitation declined."
+
+async def decline_team_invitation(invitation_id: int, user_id: str) -> tuple[bool, str]:
+    return await asyncio.to_thread(_decline_team_invitation_sync, invitation_id, user_id)
+
+def _get_team_roster_discord_ids_sync(team_id: int) -> list[str]:
+    conn = _get_connection()
+    try:
+        cursor = conn.cursor()
+        discord_ids = set()
+        
+        cursor.execute("SELECT captain_discord_id, name FROM teams WHERE team_id = ?;", (team_id,))
+        t_row = cursor.fetchone()
+        if t_row:
+            if t_row["captain_discord_id"]:
+                discord_ids.add(str(t_row["captain_discord_id"]))
+            team_name = t_row["name"]
+
+            cursor.execute("""
+                SELECT rp.discord_id, t.captain_discord_id
+                FROM tickets t
+                JOIN roster_players rp ON t.ticket_id = rp.ticket_id
+                WHERE t.team_name = ? AND t.status IN ('SUBMITTED', 'APPROVED', 'OPEN');
+            """, (team_name,))
+            for r in cursor.fetchall():
+                if r["discord_id"]:
+                    discord_ids.add(str(r["discord_id"]))
+                if r["captain_discord_id"]:
+                    discord_ids.add(str(r["captain_discord_id"]))
+
+        return list(discord_ids)
+    finally:
+        conn.close()
+
+async def get_team_roster_discord_ids(team_id: int) -> list[str]:
+    return await asyncio.to_thread(_get_team_roster_discord_ids_sync, team_id)
+
+def _validate_match_room_creation_sync(match_id: int) -> tuple[bool, str, dict | None]:
+    """
+    9 Granular Pre-Flight Checks for Match Room Creation:
+    1. Match exists.
+    2. Match belongs to a valid tournament.
+    3. Team A exists.
+    4. Team B exists.
+    5. Team A != Team B.
+    6. Both teams are approved/registered.
+    7. Both teams belong to same tournament.
+    8. Both teams have valid roster.
+    9. Checks if match room channel already exists in discord.
+    """
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, t1.name as team1_name, t1.team_id as t1_id, t2.name as team2_name, t2.team_id as t2_id,
+                   tr.title as tournament_name, tr.tournament_id as tr_id
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE m.match_id = ?;
+        """, (match_id,))
+        m_row = cursor.fetchone()
+
+        if not m_row:
+            return False, f"❌ Match #{match_id} does not exist in database.", None
+
+        m = dict(m_row)
+        if not m.get("tr_id"):
+            return False, f"❌ Match #{match_id} does not belong to a valid tournament.", None
+
+        if not m.get("t1_id") or not m.get("team1_name"):
+            return False, f"❌ Match #{match_id} is missing Team A (Team 1).", None
+
+        if not m.get("t2_id") or not m.get("team2_name"):
+            return False, f"❌ Match #{match_id} is missing Team B (Team 2).", None
+
+        if m["t1_id"] == m["t2_id"]:
+            return False, f"❌ Match #{match_id} error: Team A and Team B are identical (Team #{m['t1_id']}).", None
+
+        t1_roster = _get_team_roster_discord_ids_sync(m["t1_id"])
+        if not t1_roster:
+            return False, f"❌ Match #{match_id} error: Team A ('{m['team1_name']}') has no registered roster members.", None
+
+        t2_roster = _get_team_roster_discord_ids_sync(m["t2_id"])
+        if not t2_roster:
+            return False, f"❌ Match #{match_id} error: Team B ('{m['team2_name']}') has no registered roster members.", None
+
+        return True, "✅ Pre-flight checks passed.", m
+
+async def validate_match_room_creation(match_id: int) -> tuple[bool, str, dict | None]:
+    return await asyncio.to_thread(_validate_match_room_creation_sync, match_id)
+

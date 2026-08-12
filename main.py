@@ -16,7 +16,8 @@ from cogs.registration import (
     RegistrationReviewView,
     UploadLogoView,
     AdminReviewView,
-    CloseTicketView
+    CloseTicketView,
+    InvitationView
 )
 from cogs.support import SupportPanel, SupportTicketControlView
 from cogs.matches import MatchControlView
@@ -64,6 +65,7 @@ class GENBot(commands.Bot):
         self.add_view(UploadLogoView())
         self.add_view(AdminReviewView())
         self.add_view(CloseTicketView())
+        self.add_view(InvitationView(0))
         self.add_view(SupportPanel())
         self.add_view(SupportTicketControlView())
         self.add_view(MatchControlView())

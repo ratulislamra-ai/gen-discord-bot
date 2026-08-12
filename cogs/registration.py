@@ -54,6 +54,121 @@ def can_user_review_registration(user_id: int, creator_id: int, is_admin: bool) 
 
     return True, ""
 
+class InvitationView(discord.ui.View):
+    """Persistent View attached to DMs or server panel for Accepting/Declining team invites."""
+    def __init__(self, invitation_id: int):
+        super().__init__(timeout=None)
+        self.invitation_id = invitation_id
+
+    @discord.ui.button(label="ACCEPT INVITE", style=discord.ButtonStyle.success, emoji="✅", custom_id="gen_inv:accept")
+    async def accept_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from database.db import accept_team_invitation, get_invitation_by_id
+        inv = await get_invitation_by_id(self.invitation_id)
+        if not inv:
+            await interaction.followup.send("❌ Invitation not found.", ephemeral=True)
+            return
+
+        ok, msg = await accept_team_invitation(self.invitation_id, str(interaction.user.id), interaction.user.display_name)
+        if ok:
+            embed = discord.Embed(
+                title="🎉 Team Invitation Accepted!",
+                description=f"You are now an official member of **{inv['team_name']}** for **{inv.get('tournament_name', 'Tournament')}**!",
+                color=discord.Color.green()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+
+            try:
+                captain_member = interaction.guild.get_member(int(inv["invited_by_user_id"])) if interaction.guild else None
+                if captain_member:
+                    await captain_member.send(f"✅ **{interaction.user.display_name}** accepted your invitation to join **{inv['team_name']}**!")
+            except Exception:
+                pass
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
+    @discord.ui.button(label="DECLINE", style=discord.ButtonStyle.danger, emoji="❌", custom_id="gen_inv:decline")
+    async def decline_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        from database.db import decline_team_invitation, get_invitation_by_id
+        inv = await get_invitation_by_id(self.invitation_id)
+        ok, msg = await decline_team_invitation(self.invitation_id, str(interaction.user.id))
+        if ok:
+            await interaction.followup.send("❌ You have declined the team invitation.", ephemeral=True)
+            if inv:
+                try:
+                    captain_member = interaction.guild.get_member(int(inv["invited_by_user_id"])) if interaction.guild else None
+                    if captain_member:
+                        await captain_member.send(f"ℹ️ **{interaction.user.display_name}** declined your invitation to join **{inv['team_name']}**.")
+                except Exception:
+                    pass
+        else:
+            await interaction.followup.send(msg, ephemeral=True)
+
+class AddTeamMemberSelect(discord.ui.UserSelect):
+    """Native Discord UserSelect component for Team Captains to pick a teammate."""
+    def __init__(self, team_id: int, tournament_id: int):
+        super().__init__(
+            placeholder="👤 Select a Discord member to invite...",
+            min_values=1,
+            max_values=1,
+            custom_id="gen_team:select_member"
+        )
+        self.team_id = team_id
+        self.tournament_id = tournament_id
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        selected_user = self.values[0]
+
+        if selected_user.bot:
+            await interaction.followup.send("❌ Bots cannot be invited to tournament teams.", ephemeral=True)
+            return
+
+        if selected_user.id == interaction.user.id:
+            await interaction.followup.send("❌ You cannot invite yourself.", ephemeral=True)
+            return
+
+        from database.db import validate_player_invite_eligibility, create_team_invitation
+        eligible, err_msg = await validate_player_invite_eligibility(self.tournament_id, self.team_id, str(selected_user.id))
+        if not eligible:
+            await interaction.followup.send(err_msg, ephemeral=True)
+            return
+
+        inv = await create_team_invitation(self.team_id, self.tournament_id, str(selected_user.id), str(interaction.user.id))
+        inv_id = inv["id"] if "id" in inv else inv.get("rowid", 1)
+
+        dm_sent = False
+        try:
+            embed = discord.Embed(
+                title="🏆 GEN ESPORTS TEAM INVITATION",
+                description=f"You have been invited by **{interaction.user.display_name}** to join roster for team **ID #{self.team_id}**!\n\nClick **ACCEPT INVITE** below to confirm.",
+                color=discord.Color.gold()
+            )
+            embed.set_footer(text="GEN Esports Tournament Platform")
+            view = InvitationView(inv_id)
+            await selected_user.send(embed=embed, view=view)
+            dm_sent = True
+        except Exception as e:
+            logger.warning(f"Could not send DM to invited player {selected_user.id}: {e}")
+
+        if dm_sent:
+            await interaction.followup.send(f"✅ Player **{selected_user.mention}** invited successfully! A DM has been sent to them.", ephemeral=True)
+        else:
+            await interaction.followup.send(
+                f"⚠️ Invitation created for **{selected_user.mention}**, but they could not receive a Direct Message due to privacy settings.\n"
+                f"They can accept the invite by running `/my-invitations` in the server.",
+                ephemeral=True
+            )
+
+class ManageTeamView(discord.ui.View):
+    """View containing Team Roster Management controls."""
+    def __init__(self, team_id: int, tournament_id: int):
+        super().__init__(timeout=None)
+        self.team_id = team_id
+        self.tournament_id = tournament_id
+        self.add_item(AddTeamMemberSelect(team_id, tournament_id))
+
 class CloseTicketView(discord.ui.View):
     """Persistent View attached to registration ticket channels for closing."""
 
@@ -1745,7 +1860,97 @@ class RegistrationCog(commands.Cog):
             logger.error(f"Error executing /setup_review_channel: {error}")
             await interaction.response.send_message("❌ An unexpected error occurred.", ephemeral=True)
 
+    @app_commands.command(name="manage-team", description="[Captain/Staff] Manage team roster, invite players, or view members.")
+    async def manage_team_cmd(self, interaction: discord.Interaction):
+        """Open team roster management interface for captains and staff."""
+        await interaction.response.defer(ephemeral=True)
+        from database.db import _get_connection, get_team_roster_discord_ids
+        
+        user_id = str(interaction.user.id)
+        is_admin = interaction.user.guild_permissions.administrator
+        
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT tm.*, t.ticket_id, t.tournament_name
+                FROM teams tm
+                LEFT JOIN tickets t ON tm.name = t.team_name
+                WHERE tm.captain_discord_id = ? OR t.captain_discord_id = ?
+                ORDER BY tm.team_id DESC LIMIT 1;
+            """, (user_id, user_id))
+            team_row = cursor.fetchone()
+
+        if not team_row and not is_admin:
+            await interaction.followup.send("❌ Only team captains or staff can manage team rosters.", ephemeral=True)
+            return
+
+        if not team_row:
+            with _get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM teams ORDER BY team_id DESC LIMIT 1;")
+                team_row = cursor.fetchone()
+            if not team_row:
+                await interaction.followup.send("❌ No registered teams found.", ephemeral=True)
+                return
+
+        team = dict(team_row)
+        team_id = team["team_id"]
+        
+        tourn_id = 0
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT tournament_id FROM tournaments ORDER BY tournament_id DESC LIMIT 1;")
+            tr = cursor.fetchone()
+            if tr:
+                tourn_id = tr["tournament_id"]
+
+        roster_ids = await get_team_roster_discord_ids(team_id)
+        roster_mentions = []
+        for r_id in roster_ids:
+            mb = interaction.guild.get_member(int(r_id)) if interaction.guild else None
+            if mb:
+                roster_mentions.append(f"• {mb.mention} ({mb.display_name})")
+            else:
+                roster_mentions.append(f"• Discord ID `{r_id}`")
+
+        roster_str = "\n".join(roster_mentions) if roster_mentions else "No active members."
+
+        embed = discord.Embed(
+            title=f"👥 Team Roster Management — {team['name']}",
+            description=(
+                f"**Team ID:** `{team_id}`\n"
+                f"**Captain:** <@{team.get('captain_discord_id', user_id)}>\n\n"
+                f"**Current Roster ({len(roster_ids)} players):**\n{roster_str}\n\n"
+                "Use the **User Select** dropdown below to invite a Discord server member to join your team!"
+            ),
+            color=discord.Color.blue()
+        )
+        view = ManageTeamView(team_id, tourn_id)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="my-invitations", description="View and accept/decline your pending team invitations.")
+    async def my_invitations_cmd(self, interaction: discord.Interaction):
+        """View pending team invitations for the user."""
+        await interaction.response.defer(ephemeral=True)
+        from database.db import get_pending_invitations_for_user
+        
+        invites = await get_pending_invitations_for_user(str(interaction.user.id))
+        if not invites:
+            await interaction.followup.send("ℹ️ You have no pending team invitations.", ephemeral=True)
+            return
+
+        inv = invites[0]
+        inv_id = inv["id"] if "id" in inv else inv.get("rowid", 1)
+        embed = discord.Embed(
+            title="📩 Pending Team Invitation",
+            description=f"You have been invited to join **{inv['team_name']}** for **{inv.get('tournament_name', 'Tournament')}**!\n\nClick **ACCEPT INVITE** or **DECLINE** below.",
+            color=discord.Color.gold()
+        )
+        view = InvitationView(inv_id)
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
 async def setup(bot: commands.Bot):
     """Register RegistrationCog."""
     await bot.add_cog(RegistrationCog(bot))
+
 
