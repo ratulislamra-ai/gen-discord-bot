@@ -1745,6 +1745,107 @@ async def get_tournament_matches(tournament_id_or_slug: str) -> list[dict]:
     """Asynchronously fetch matches for a tournament."""
     return await asyncio.to_thread(_get_tournament_matches_sync, tournament_id_or_slug)
 
+def _get_tournament_bracket_tree_sync(tournament_id_or_slug: str) -> dict:
+    """Fetch structured bracket tree for a tournament including rounds, matches, and champion."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM tournaments 
+            WHERE CAST(tournament_id AS TEXT) = ? OR LOWER(slug) = LOWER(?) OR LOWER(title) = LOWER(?);
+        """, (tournament_id_or_slug, tournament_id_or_slug, tournament_id_or_slug))
+        t_row = cursor.fetchone()
+        
+        if not t_row:
+            return {"tournament": None, "has_bracket": False, "rounds": [], "champion": None}
+
+        t_dict = dict(t_row)
+        t_id = t_dict["tournament_id"]
+
+        # Fetch registered team count
+        cursor.execute("SELECT COUNT(*) FROM tickets WHERE (LOWER(tournament_name) = LOWER(?) OR LOWER(tournament_name) = LOWER(?)) AND status = 'APPROVED';", (t_dict["title"], t_dict["slug"]))
+        registered_count = cursor.fetchone()[0]
+        if registered_count == 0:
+            cursor.execute("SELECT COUNT(*) FROM tickets WHERE LOWER(tournament_name) = LOWER(?) OR LOWER(tournament_name) = LOWER(?);", (t_dict["title"], t_dict["slug"]))
+            registered_count = cursor.fetchone()[0]
+
+        t_dict["registered_teams_count"] = registered_count
+
+        # Fetch matches
+        cursor.execute("""
+            SELECT m.match_id, m.tournament_id, m.stage_name, m.round_number, m.team1_id, m.team2_id,
+                   m.team1_score, m.team2_score, m.winner_id, m.status, m.scheduled_time, m.lobby_info,
+                   t1.name as team1_name, t1.logo_url as team1_logo,
+                   t2.name as team2_name, t2.logo_url as team2_logo,
+                   tw.name as winner_name, tw.logo_url as winner_logo
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN teams tw ON m.winner_id = tw.team_id
+            WHERE m.tournament_id = ?
+            ORDER BY m.round_number ASC, m.match_id ASC;
+        """, (t_id,))
+        m_rows = cursor.fetchall()
+        matches = [dict(r) for r in m_rows]
+
+        if not matches:
+            return {
+                "tournament": t_dict,
+                "has_bracket": False,
+                "rounds": [],
+                "champion": None
+            }
+
+        # Group matches by round_number
+        rounds_map = {}
+        max_round = 1
+        for m in matches:
+            r_num = m.get("round_number") or 1
+            if r_num > max_round:
+                max_round = r_num
+            if r_num not in rounds_map:
+                rounds_map[r_num] = []
+            rounds_map[r_num].append(m)
+
+        rounds_list = []
+        for r_num in sorted(rounds_map.keys()):
+            if r_num == max_round:
+                r_name = "Final"
+            elif r_num == max_round - 1:
+                r_name = "Semifinals"
+            elif r_num == max_round - 2:
+                r_name = "Quarterfinals"
+            else:
+                r_name = f"Round {r_num}"
+
+            rounds_list.append({
+                "round_number": r_num,
+                "round_name": r_name,
+                "matches": rounds_map[r_num]
+            })
+
+        # Check for champion
+        champion = None
+        final_matches = rounds_map.get(max_round, [])
+        if final_matches:
+            final_m = final_matches[0]
+            if final_m.get("status") == "COMPLETED" and final_m.get("winner_id"):
+                champion = {
+                    "team_id": final_m["winner_id"],
+                    "name": final_m.get("winner_name") or "Champions",
+                    "logo_url": final_m.get("winner_logo") or ""
+                }
+
+        return {
+            "tournament": t_dict,
+            "has_bracket": True,
+            "rounds": rounds_list,
+            "champion": champion
+        }
+
+async def get_tournament_bracket_tree(tournament_id_or_slug: str) -> dict:
+    """Asynchronously fetch structured bracket tree."""
+    return await asyncio.to_thread(_get_tournament_bracket_tree_sync, tournament_id_or_slug)
+
 def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int, winner_id: int | None = None, status: str = "COMPLETED") -> dict | None:
     """Synchronously record match result and auto-advance winner to next round match."""
     with _get_connection() as conn:

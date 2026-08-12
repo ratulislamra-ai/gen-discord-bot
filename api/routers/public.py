@@ -8,6 +8,7 @@ from database.db import (
     get_platform_stats,
     get_public_matches,
     get_tournament_matches,
+    get_tournament_bracket_tree,
     get_tournament_standings,
     get_user_all_registrations,
     get_user_all_cases,
@@ -106,11 +107,11 @@ async def get_public_tournament_matches(slug: str):
     matches = await get_tournament_matches(slug)
     return matches
 
-@router.get("/tournaments/{slug}/bracket", response_model=List[Dict[str, Any]], summary="Get Bracket for Tournament")
+@router.get("/tournaments/{slug}/bracket", response_model=Dict[str, Any], summary="Get Bracket Tree for Tournament")
 async def get_public_tournament_bracket(slug: str):
-    """Return bracket matches for a specific tournament."""
-    matches = await get_tournament_matches(slug)
-    return matches
+    """Return structured bracket tree (rounds, matches, champion, has_bracket) for a specific tournament."""
+    tree = await get_tournament_bracket_tree(slug)
+    return tree
 
 @router.get("/tournaments/{slug}/standings", response_model=List[Dict[str, Any]], summary="Get Standings for Tournament")
 async def get_public_tournament_standings(slug: str):

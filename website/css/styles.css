@@ -1067,29 +1067,41 @@ body {
     background: rgba(255, 255, 255, 0.02);
 }
 
-/* Bracket Layout */
+/* Bracket Layout & Esports Visuals */
+.bracket-wrapper {
+    width: 100%;
+    overflow-x: auto;
+    padding: 1.5rem 0;
+    scroll-behavior: smooth;
+}
 .bracket-container {
     display: flex;
-    gap: 2rem;
-    overflow-x: auto;
-    padding: 2rem 1rem;
+    gap: 3.5rem;
+    min-width: max-content;
+    padding: 2rem 1.5rem;
     align-items: center;
+    position: relative;
 }
 .bracket-round {
     display: flex;
     flex-direction: column;
-    gap: 2rem;
-    min-width: 260px;
+    justify-content: space-around;
+    min-width: 280px;
+    position: relative;
 }
 .bracket-round-title {
     font-family: var(--font-heading);
-    font-size: 1.1rem;
-    font-weight: 700;
+    font-size: 1rem;
+    font-weight: 800;
     color: var(--accent-cyan);
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 1.5px;
     text-align: center;
-    margin-bottom: 1rem;
+    margin-bottom: 1.5rem;
+    background: rgba(0, 240, 255, 0.06);
+    border: 1px solid rgba(0, 240, 255, 0.2);
+    padding: 0.5rem 1rem;
+    border-radius: var(--radius-sm);
 }
 .bracket-match-card {
     background: var(--bg-card);
@@ -1100,11 +1112,24 @@ body {
     flex-direction: column;
     gap: 0.6rem;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-    transition: all 0.25s ease;
+    transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    cursor: pointer;
+    position: relative;
+    z-index: 2;
 }
 .bracket-match-card:hover {
     border-color: var(--accent-cyan);
-    box-shadow: 0 0 20px rgba(0, 240, 255, 0.2);
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.3);
+    transform: translateY(-2px);
+}
+.bracket-match-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    font-weight: 700;
+    margin-bottom: 0.25rem;
 }
 .bracket-team-row {
     display: flex;
@@ -1112,19 +1137,102 @@ body {
     align-items: center;
     padding: 0.5rem 0.75rem;
     background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.05);
     border-radius: var(--radius-sm);
     font-weight: 600;
     font-size: 0.92rem;
+    transition: all 0.2s ease;
 }
 .bracket-team-row.winner {
-    background: rgba(0, 255, 136, 0.15);
-    border: 1px solid rgba(0, 255, 136, 0.4);
-    color: var(--accent-green);
+    background: rgba(0, 255, 136, 0.12);
+    border-color: rgba(0, 255, 136, 0.5);
+    color: #00ff88;
+    font-weight: 700;
+}
+.bracket-team-info {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+}
+.bracket-team-logo {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255,255,255,0.1);
 }
 .bracket-score {
     font-family: var(--font-heading);
     font-weight: 800;
     font-size: 1.1rem;
     color: var(--accent-gold);
+}
+
+/* Bracket Connectors */
+.bracket-connector-line {
+    position: absolute;
+    right: -1.75rem;
+    top: 50%;
+    width: 1.75rem;
+    height: 2px;
+    background: var(--border-card);
+    z-index: 1;
+}
+
+/* Champion Card Banner */
+.champion-banner {
+    background: linear-gradient(135deg, rgba(255, 215, 0, 0.15), rgba(0, 0, 0, 0.6));
+    border: 2px solid var(--accent-gold);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    text-align: center;
+    margin-bottom: 2rem;
+    box-shadow: 0 0 35px rgba(255, 215, 0, 0.25);
+    animation: championGlow 3s infinite alternate;
+}
+@keyframes championGlow {
+    0% { box-shadow: 0 0 20px rgba(255, 215, 0, 0.2); }
+    100% { box-shadow: 0 0 40px rgba(255, 215, 0, 0.5); }
+}
+.champion-logo {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    border: 3px solid var(--accent-gold);
+    margin: 1rem auto;
+    object-fit: cover;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+}
+.champion-title {
+    font-family: var(--font-heading);
+    font-size: 2.2rem;
+    font-weight: 900;
+    color: var(--accent-gold);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-top: 0.5rem;
+}
+
+/* Status Badges */
+.badge-live {
+    background: rgba(255, 0, 85, 0.2);
+    border: 1px solid #ff0055;
+    color: #ff0055;
+    animation: pulseLive 1.5s infinite;
+}
+@keyframes pulseLive {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+.badge-final {
+    background: rgba(0, 255, 136, 0.15);
+    border: 1px solid #00ff88;
+    color: #00ff88;
+}
+.badge-upcoming {
+    background: rgba(0, 240, 255, 0.15);
+    border: 1px solid #00f0ff;
+    color: #00f0ff;
 }
 
