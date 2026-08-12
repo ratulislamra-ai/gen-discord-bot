@@ -1124,6 +1124,16 @@ async def get_ticket_by_review_message(message_id: int) -> dict | None:
     """Asynchronously fetch ticket by review_message_id."""
     return await asyncio.to_thread(_get_ticket_by_review_message_sync, message_id)
 
+def _sanitize_logo_url(raw_url: str | None) -> str:
+    if not raw_url:
+        return ""
+    clean = str(raw_url).replace("\\", "/")
+    if (":" in clean and not clean.startswith("http")) or clean.startswith("file://"):
+        if "uploads/" in clean:
+            return "uploads/" + clean.split("uploads/")[-1]
+        return ""
+    return clean
+
 def _get_approved_teams_by_tournament_sync(tournament: str) -> list[dict]:
     """Synchronously fetch all APPROVED registrations for a given tournament."""
     clean_search = tournament.replace('-', ' ').lower()
@@ -1156,12 +1166,17 @@ def _get_approved_teams_by_tournament_sync(tournament: str) -> list[dict]:
             roster_rows = cursor.fetchall()
             roster = [{"role": r["player_role"], "ign": r["ign"], "discord_id": r["discord_id"]} for r in roster_rows]
             
-            # Return sanitized record (NO phone number, NO internal DB IDs, NO admin info)
+            # Fetch team public_id if exists
+            cursor.execute("SELECT public_id FROM teams WHERE LOWER(name) = LOWER(?);", (ticket["team_name"],))
+            t_row = cursor.fetchone()
+            public_id = t_row["public_id"] if t_row else (ticket["registration_code"] or f"GEN-T-{ticket_id:04d}")
+
             approved_teams.append({
                 "registration_id": ticket["registration_code"] or f"GEN-{ticket_id:06d}",
+                "public_id": public_id,
                 "tournament": ticket["tournament_name"],
                 "team_name": ticket["team_name"],
-                "team_logo_url": ticket["team_logo_url"],
+                "team_logo_url": _sanitize_logo_url(ticket["team_logo_url"]),
                 "captain_name": ticket["captain_name"],
                 "roster": roster,
                 "approved_at": ticket["approved_at"]

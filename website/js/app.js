@@ -430,7 +430,19 @@ const App = {
         ` : `
             <div style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 280px; overflow-y: auto; padding-right: 0.25rem;">
                 ${approvedTeams.map(tm => {
-                    const logoUrl = tm.team_logo_url ? (tm.team_logo_url.startsWith('http') ? tm.team_logo_url : '/' + tm.team_logo_url) : TEAM_PLACEHOLDER_LOGO;
+                    let logoUrl = tm.team_logo_url ? String(tm.team_logo_url).trim() : '';
+                    if (logoUrl.includes(':') || logoUrl.startsWith('file://')) {
+                        if (logoUrl.includes('uploads/')) {
+                            logoUrl = '/' + logoUrl.substring(logoUrl.indexOf('uploads/'));
+                        } else {
+                            logoUrl = TEAM_PLACEHOLDER_LOGO;
+                        }
+                    } else if (logoUrl && !logoUrl.startsWith('http') && !logoUrl.startsWith('data:') && !logoUrl.startsWith('/')) {
+                        logoUrl = '/' + logoUrl;
+                    }
+                    if (!logoUrl) {
+                        logoUrl = TEAM_PLACEHOLDER_LOGO;
+                    }
                     const publicId = tm.public_id || tm.registration_id || 'GEN-TEAM-XXXX';
                     return `
                         <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-card); border-radius: var(--radius-md); padding: 0.85rem 1.1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
