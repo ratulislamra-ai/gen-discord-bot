@@ -244,8 +244,6 @@ class MatchesCog(commands.Cog):
         seeds = await generate_tournament_seeds(tournament_id, method.upper())
         if not seeds:
             await interaction.followup.send("❌ No approved teams or seeds already locked.", ephemeral=True)
-            return
-        
         desc = "\n".join([f"**Seed {s['seed_number']}**: Team ID {s['team_id']}" for s in seeds[:16]])
         embed = discord.Embed(
             title=f"🎲 Tournament #{tournament_id} Seeds Generated ({method.upper()})",
@@ -253,6 +251,91 @@ class MatchesCog(commands.Cog):
             color=discord.Color.green()
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="create-match-room", description="[Admin/Staff] Provision private match room channel for a match.")
+    @app_commands.describe(match_id="Match ID")
+    async def create_match_room_cmd(self, interaction: discord.Interaction, match_id: int):
+        """Admin command to trigger private match room channel creation."""
+        await interaction.response.defer(ephemeral=True)
+        ch = await create_or_get_match_room_channel(interaction.guild, match_id)
+        if ch:
+            await interaction.followup.send(f"✅ Match room created: {ch.mention}", ephemeral=True)
+        else:
+            await interaction.followup.send("❌ Could not create match room. Verify match ID and participating teams.", ephemeral=True)
+
+async def create_or_get_match_room_channel(guild: discord.Guild, match_id: int) -> discord.TextChannel | None:
+    """Find or create private Discord match room for a scheduled match with proper team permissions."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, t1.name as team1_name, t1.team_id as t1_id, t2.name as team2_name, t2.team_id as t2_id,
+                   tr.title as tournament_name
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE m.match_id = ?;
+        """, (match_id,))
+        m = cursor.fetchone()
+
+    if not m:
+        return None
+
+    ch_id = m.get("discord_channel_id")
+    if ch_id:
+        existing_ch = guild.get_channel(int(ch_id))
+        if existing_ch and isinstance(existing_ch, discord.TextChannel):
+            return existing_ch
+
+    cat_name = "🔒 MATCH ROOMS"
+    category = discord.utils.get(guild.categories, name=cat_name)
+    if not category:
+        try:
+            category = await guild.create_category(cat_name)
+        except Exception as e:
+            logger.error(f"Error creating category: {e}")
+            category = None
+
+    from database.db import get_team_roster_discord_ids, save_match_discord_channel
+    t1_discords = await get_team_roster_discord_ids(m["t1_id"]) if m.get("t1_id") else []
+    t2_discords = await get_team_roster_discord_ids(m["t2_id"]) if m.get("t2_id") else []
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(read_messages=False, send_messages=False),
+        guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True, manage_channels=True)
+    }
+
+    for d_id in set(t1_discords + t2_discords):
+        try:
+            member = guild.get_member(int(d_id)) or await guild.fetch_member(int(d_id))
+            if member:
+                overwrites[member] = discord.PermissionOverwrite(read_messages=True, send_messages=True, attach_files=True)
+        except Exception:
+            pass
+
+    pm_id = m.get("public_match_id") or f"{match_id:06d}"
+    t1_name = m.get("team1_name") or "Team A"
+    t2_name = m.get("team2_name") or "Team B"
+    ch_name = f"match-{pm_id.lower()}"
+
+    if category:
+        channel = await category.create_text_channel(name=ch_name, overwrites=overwrites)
+    else:
+        channel = await guild.create_text_channel(name=ch_name, overwrites=overwrites)
+
+    await save_match_discord_channel(match_id, str(channel.id))
+
+    embed = discord.Embed(
+        title="━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🏆 GEN ESPORTS MATCH ROOM\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        description=f"**Match ID:** `{pm_id}`\n\n**{t1_name}**  VS  **{t2_name}**\n\n**Tournament:** `{m.get('tournament_name', 'Championship')}`\n**Stage:** `{m.get('stage_name', 'Round 1')}`",
+        color=discord.Color.from_rgb(0, 255, 163)
+    )
+    embed.add_field(name="Check-in Status", value=f"{t1_name}: ❌\n{t2_name}: ❌", inline=False)
+    embed.set_footer(text="Use the control buttons below for Check-in, Map Veto, Lobby Credentials & Score Submission.")
+
+    view = MatchControlView(str(match_id))
+    await channel.send(embed=embed, view=view)
+    return channel
 
 async def setup(bot: commands.Bot):
     """Asynchronously register MatchesCog."""

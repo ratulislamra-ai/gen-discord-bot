@@ -681,6 +681,8 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE teams ADD COLUMN region TEXT DEFAULT 'South Asia';")
         if "verification_status" not in tm_cols:
             cursor.execute("ALTER TABLE teams ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED';")
+        if "roster_locked" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN roster_locked INTEGER DEFAULT 0;")
 
         cursor.execute("PRAGMA table_info(matches);")
         m_cols = [col[1] for col in cursor.fetchall()]
@@ -740,6 +742,8 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE matches ADD COLUMN bracket_type TEXT DEFAULT 'WINNERS';")
         if "swiss_round" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN swiss_round INTEGER DEFAULT 1;")
+        if "discord_channel_id" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN discord_channel_id TEXT;")
 
         # Seed initial tournaments if empty or purge legacy seeds
         cursor.execute("DELETE FROM tournaments WHERE slug = 'gen-lol-cup' OR LOWER(game_type) LIKE '%league%' OR LOWER(title) LIKE '%league%';")
@@ -3220,3 +3224,132 @@ def _get_system_health_metrics_sync() -> dict:
 async def get_system_health_metrics() -> dict:
     """Asynchronously fetch system health."""
     return await asyncio.to_thread(_get_system_health_metrics_sync)
+
+# ==============================================================================
+# MATCH CENTER & ROSTER MANAGEMENT HELPER FUNCTIONS
+# ==============================================================================
+
+def _get_user_team_membership_sync(discord_user_id: str) -> dict | None:
+    """Get active team membership for a discord user including role and roster details."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.player_id, p.display_name, tm.role, tm.status as member_status,
+                   t.team_id, t.public_id as team_public_id, t.name as team_name, t.slug as team_slug,
+                   t.logo_url, t.game, t.region, t.verification_status, t.roster_locked, t.captain_player_id
+            FROM players p
+            JOIN team_members tm ON p.player_id = tm.player_id
+            JOIN teams t ON tm.team_id = t.team_id
+            WHERE (p.discord_user_id = ? OR p.discord_id = ?) AND tm.status = 'ACTIVE'
+            ORDER BY tm.membership_id DESC LIMIT 1;
+        """, (str(discord_user_id), str(discord_user_id)))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_user_team_membership(discord_user_id: str) -> dict | None:
+    """Asynchronously fetch team membership."""
+    return await asyncio.to_thread(_get_user_team_membership_sync, discord_user_id)
+
+def _add_player_to_team_roster_sync(team_id: int, target_discord_id: str, username: str = "", display_name: str = "", role: str = "PLAYER") -> dict:
+    """Add a player to team roster with server-side validation."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT roster_locked, name FROM teams WHERE team_id = ?;", (team_id,))
+        t_row = cursor.fetchone()
+        if not t_row:
+            raise ValueError("Team not found.")
+        if t_row["roster_locked"]:
+            raise ValueError("Team roster is locked. Roster modifications require admin approval.")
+
+        cursor.execute("SELECT player_id, verification_status FROM players WHERE discord_user_id = ?;", (str(target_discord_id),))
+        p_row = cursor.fetchone()
+        if not p_row:
+            disp = display_name or username or f"Player_{target_discord_id[-4:]}"
+            uname = username or disp
+            cursor.execute("""
+                INSERT INTO players (discord_user_id, username, display_name, verification_status)
+                VALUES (?, ?, ?, 'UNVERIFIED');
+            """, (str(target_discord_id), uname, disp))
+            player_id = cursor.lastrowid
+            v_status = "UNVERIFIED"
+        else:
+            player_id = p_row["player_id"]
+            v_status = p_row["verification_status"]
+
+        if v_status == "SUSPENDED":
+            raise ValueError("This player is currently suspended from competitive play.")
+
+        cursor.execute("SELECT membership_id, status FROM team_members WHERE team_id = ? AND player_id = ?;", (team_id, player_id))
+        m_row = cursor.fetchone()
+        if m_row:
+            if m_row["status"] == "ACTIVE":
+                raise ValueError("Player is already on this team's active roster.")
+            else:
+                cursor.execute("UPDATE team_members SET status = 'ACTIVE', role = ? WHERE membership_id = ?;", (role, m_row["membership_id"]))
+        else:
+            cursor.execute("INSERT INTO team_members (team_id, player_id, role, status) VALUES (?, ?, ?, 'ACTIVE');", (team_id, player_id, role))
+
+        conn.commit()
+        return {"team_id": team_id, "player_id": player_id, "discord_user_id": str(target_discord_id), "role": role}
+
+async def add_player_to_team_roster(team_id: int, target_discord_id: str, username: str = "", display_name: str = "", role: str = "PLAYER") -> dict:
+    """Asynchronously add player to team roster."""
+    return await asyncio.to_thread(_add_player_to_team_roster_sync, team_id, target_discord_id, username, display_name, role)
+
+def _remove_player_from_team_roster_sync(team_id: int, player_id: int) -> bool:
+    """Deactivate player from team roster preserving historical record."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT roster_locked FROM teams WHERE team_id = ?;", (team_id,))
+        t_row = cursor.fetchone()
+        if t_row and t_row["roster_locked"]:
+            raise ValueError("Team roster is locked. Roster modifications require admin approval.")
+
+        cursor.execute("UPDATE team_members SET status = 'REMOVED' WHERE team_id = ? AND player_id = ?;", (team_id, player_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def remove_player_from_team_roster(team_id: int, player_id: int) -> bool:
+    """Asynchronously remove player from team roster."""
+    return await asyncio.to_thread(_remove_player_from_team_roster_sync, team_id, player_id)
+
+def _lock_team_roster_sync(team_id: int) -> bool:
+    """Lock team roster and create historical roster snapshot."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE teams SET roster_locked = 1 WHERE team_id = ?;", (team_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def lock_team_roster(team_id: int) -> bool:
+    """Asynchronously lock team roster."""
+    return await asyncio.to_thread(_lock_team_roster_sync, team_id)
+
+def _save_match_discord_channel_sync(match_id: int, channel_id: str) -> bool:
+    """Save associated Discord match room channel ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE matches SET discord_channel_id = ? WHERE match_id = ?;", (str(channel_id), match_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def save_match_discord_channel(match_id: int, channel_id: str) -> bool:
+    """Asynchronously save match discord channel ID."""
+    return await asyncio.to_thread(_save_match_discord_channel_sync, match_id, channel_id)
+
+def _get_team_roster_discord_ids_sync(team_id: int) -> list[str]:
+    """Fetch list of Discord user IDs for active roster members and captain."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT COALESCE(p.discord_user_id, p.discord_id) as d_id
+            FROM team_members tm
+            JOIN players p ON tm.player_id = p.player_id
+            WHERE tm.team_id = ? AND tm.status = 'ACTIVE' 
+              AND ((p.discord_user_id IS NOT NULL AND p.discord_user_id != '') OR (p.discord_id IS NOT NULL AND p.discord_id != ''));
+        """, (team_id,))
+        return [r["d_id"] for r in cursor.fetchall() if r["d_id"]]
+
+async def get_team_roster_discord_ids(team_id: int) -> list[str]:
+    """Asynchronously fetch team roster discord IDs."""
+    return await asyncio.to_thread(_get_team_roster_discord_ids_sync, team_id)
