@@ -288,6 +288,18 @@ def _init_db_sync():
             );
         """)
 
+        # support_panels table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS support_panels (
+                panel_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                message_id TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(guild_id, channel_id)
+            );
+        """)
+
         # players table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS players (
@@ -3358,3 +3370,30 @@ def _get_team_roster_discord_ids_sync(team_id: int) -> list[str]:
 async def get_team_roster_discord_ids(team_id: int) -> list[str]:
     """Asynchronously fetch team roster discord IDs."""
     return await asyncio.to_thread(_get_team_roster_discord_ids_sync, team_id)
+
+def _save_support_panel_location_sync(guild_id: str, channel_id: str, message_id: str) -> None:
+    """Save active support panel location for duplicate prevention."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO support_panels (guild_id, channel_id, message_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(guild_id, channel_id) DO UPDATE SET message_id = excluded.message_id, created_at = CURRENT_TIMESTAMP;
+        """, (str(guild_id), str(channel_id), str(message_id)))
+        conn.commit()
+
+async def save_support_panel_location(guild_id: str, channel_id: str, message_id: str) -> None:
+    """Asynchronously save support panel location."""
+    await asyncio.to_thread(_save_support_panel_location_sync, guild_id, channel_id, message_id)
+
+def _get_support_panel_location_sync(guild_id: str, channel_id: str) -> dict | None:
+    """Fetch active support panel location for a given channel."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM support_panels WHERE guild_id = ? AND channel_id = ?;", (str(guild_id), str(channel_id)))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_support_panel_location(guild_id: str, channel_id: str) -> dict | None:
+    """Asynchronously fetch support panel location."""
+    return await asyncio.to_thread(_get_support_panel_location_sync, guild_id, channel_id)

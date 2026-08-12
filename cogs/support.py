@@ -18,7 +18,9 @@ from database.db import (
     get_user_all_registrations,
     get_user_all_cases,
     get_open_tournaments,
-    log_admin_action
+    log_admin_action,
+    save_support_panel_location,
+    get_support_panel_location
 )
 import config.settings as settings
 
@@ -458,36 +460,73 @@ class SupportCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="setup-support-panel", description="[Admin] Post persistent GEN Esports Support Panel into channel.")
+    @app_commands.command(name="setup-support-panel", description="[Admin] Post persistent GEN Esports Support Panel into current channel.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_support_panel_cmd(self, interaction: discord.Interaction):
-        """Admin command to deploy persistent support panel embed."""
-        embed = discord.Embed(
-            title="━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ GEN ESPORTS SUPPORT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            description="Welcome to **GEN Esports Support**. Need help with registrations, match schedules, map vetoes, score disputes, payment/prizes, or player reports?\n\nClick the button below to contact GEN Esports Support.",
-            color=discord.Color.from_rgb(0, 255, 163)
-        )
-        embed.set_footer(text="GEN Esports Support Engine • Persistent Panel")
-        view = SupportPanel()
-        await interaction.channel.send(embed=embed, view=view)
-        await interaction.response.send_message("✅ Support Panel deployed successfully.", ephemeral=True)
-
-    @app_commands.command(name="support", description="Post the persistent GEN Esports Support Panel (Staff Only).")
-    async def post_support_panel(self, interaction: discord.Interaction):
-        """Slash command to deploy the support center panel."""
-        if not interaction.user.guild_permissions.administrator and interaction.user.id != settings.BOT_OWNER_ID:
-            await interaction.response.send_message("❌ **Admin Only**: Only administrators can post the main support panel.", ephemeral=True)
+        """Admin command to deploy persistent support panel embed into the current channel."""
+        # 1. Admin permission check
+        is_admin = interaction.user.guild_permissions.administrator or interaction.user.id == settings.BOT_OWNER_ID
+        if not is_admin:
+            await interaction.response.send_message("❌ **Admin Only**: Only administrators can configure the support panel.", ephemeral=True)
             return
 
+        channel = interaction.channel
+        guild = interaction.guild
+
+        # 2. Bot permission checks
+        if isinstance(channel, discord.TextChannel):
+            bot_perms = channel.permissions_for(guild.me)
+            missing = []
+            if not bot_perms.view_channel:
+                missing.append("View Channel")
+            if not bot_perms.send_messages:
+                missing.append("Send Messages")
+            if not bot_perms.embed_links:
+                missing.append("Embed Links")
+            if not bot_perms.read_message_history:
+                missing.append("Read Message History")
+            if missing:
+                await interaction.response.send_message(
+                    f"❌ **Missing Bot Permissions**: The bot is missing required permissions in {channel.mention}: `{', '.join(missing)}`.",
+                    ephemeral=True
+                )
+                return
+
+        # 3. Duplicate panel prevention
+        existing = await get_support_panel_location(str(guild.id), str(channel.id))
+        if existing:
+            await interaction.response.send_message("⚠️ Support Panel is already configured in this channel.", ephemeral=True)
+            return
+
+        # 4. Deploy Support Panel
         embed = discord.Embed(
             title="━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🛡️ GEN ESPORTS SUPPORT\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-            description="Welcome to **GEN Esports Support**. Need help with registrations, match schedules, map vetoes, score disputes, payment/prizes, or player reports?\n\nClick the button below to contact GEN Esports Support.",
+            description="Need help?\n\nSelect the type of issue you are facing and our support team will assist you.",
             color=discord.Color.from_rgb(0, 255, 163)
         )
-        embed.set_footer(text="GEN Esports Support Engine • Persistent Panel")
+        embed.set_footer(text="GEN Esports Platform • Support Center")
         view = SupportPanel()
-        await interaction.channel.send(embed=embed, view=view)
-        await interaction.response.send_message("✅ Support Panel deployed successfully.", ephemeral=True)
+        
+        try:
+            panel_msg = await channel.send(embed=embed, view=view)
+            await save_support_panel_location(str(guild.id), str(channel.id), str(panel_msg.id))
+        except Exception as e:
+            logger.error(f"[SUPPORT] Error sending support panel message: {e}")
+            await interaction.response.send_message(f"❌ Failed to post support panel: {e}", ephemeral=True)
+            return
+
+        # 5. Success confirmation
+        resp_msg = (
+            f"✅ **GEN Esports Support Panel deployed!**\n\n"
+            f"**Channel:**\n{channel.mention}\n\n"
+            f"Users can now click:\n🎫 **OPEN SUPPORT TICKET**"
+        )
+        await interaction.response.send_message(resp_msg, ephemeral=True)
+
+    @app_commands.command(name="support", description="[Staff] Post persistent GEN Esports Support Panel into current channel.")
+    async def post_support_panel(self, interaction: discord.Interaction):
+        """Staff slash command alias for support panel deployment."""
+        await self.setup_support_panel_cmd.callback(self, interaction)
 
     @app_commands.command(name="my-registration", description="View your active team registrations and approval status.")
     async def my_registration(self, interaction: discord.Interaction):
