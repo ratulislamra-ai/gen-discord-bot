@@ -69,6 +69,9 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE tickets ADD COLUMN review_channel_id INTEGER;")
         if "review_message_id" not in columns:
             cursor.execute("ALTER TABLE tickets ADD COLUMN review_message_id INTEGER;")
+        if "updated_at" not in columns:
+            cursor.execute("ALTER TABLE tickets ADD COLUMN updated_at TIMESTAMP;")
+            cursor.execute("UPDATE tickets SET updated_at = CURRENT_TIMESTAMP WHERE updated_at IS NULL;")
 
         # Create bot_settings table for storing key-value configurations
         cursor.execute("""
@@ -2310,7 +2313,7 @@ def _get_user_all_registrations_sync(user_id: str) -> list[dict]:
         cursor.execute("""
             SELECT ticket_id, registration_code, tournament_name, team_name, captain_name, status, created_at, updated_at 
             FROM tickets 
-            WHERE creator_id = ? OR captain_discord_id = ? 
+            WHERE user_id = ? OR captain_discord_id = ? 
             ORDER BY ticket_id DESC;
         """, (str(user_id), str(user_id)))
         return [dict(row) for row in cursor.fetchall()]
