@@ -245,6 +245,49 @@ def _init_db_sync():
             );
         """)
 
+        # support_tickets table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS support_tickets (
+                ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT UNIQUE NOT NULL,
+                ticket_type TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                guild_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                related_tournament_id INTEGER,
+                related_registration_id INTEGER,
+                assigned_staff_id TEXT DEFAULT NULL,
+                priority TEXT DEFAULT 'NORMAL',
+                status TEXT DEFAULT 'OPEN',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                closed_at TIMESTAMP DEFAULT NULL,
+                resolution TEXT DEFAULT NULL,
+                close_reason TEXT DEFAULT NULL
+            );
+        """)
+
+        # support_ticket_notes table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS support_ticket_notes (
+                note_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                staff_id TEXT NOT NULL,
+                note_text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # support_transcripts table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS support_transcripts (
+                transcript_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                case_id TEXT NOT NULL,
+                transcript_text TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         # Safely migrate schema: add tournament & match columns if missing
         cursor.execute("PRAGMA table_info(tournaments);")
         t_cols = [col[1] for col in cursor.fetchall()]
@@ -1309,3 +1352,257 @@ def _get_public_matches_sync() -> list[dict]:
 async def get_public_matches() -> list[dict]:
     """Asynchronously fetch public match records."""
     return await asyncio.to_thread(_get_public_matches_sync)
+
+# ==============================================================================
+# SUPPORT TICKETS & DISCORD OPERATIONS FUNCTIONS
+# ==============================================================================
+
+def _generate_next_case_id_sync() -> str:
+    """Generate unique Case ID in format GEN-CASE-XXXXXX."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM support_tickets;")
+        count = cursor.fetchone()[0] + 1
+        case_id = f"GEN-CASE-{count:06d}"
+        
+        # Verify collision safety
+        while True:
+            cursor.execute("SELECT COUNT(*) FROM support_tickets WHERE case_id = ?;", (case_id,))
+            if cursor.fetchone()[0] == 0:
+                break
+            count += 1
+            case_id = f"GEN-CASE-{count:06d}"
+        return case_id
+
+async def generate_next_case_id() -> str:
+    """Asynchronously generate a unique Case ID."""
+    return await asyncio.to_thread(_generate_next_case_id_sync)
+
+def _create_support_ticket_sync(
+    case_id: str,
+    ticket_type: str,
+    user_id: str,
+    guild_id: str,
+    channel_id: str,
+    related_tournament_id: int | None = None,
+    related_registration_id: int | None = None,
+    priority: str = "NORMAL"
+) -> dict:
+    """Synchronously record a new support ticket."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO support_tickets 
+            (case_id, ticket_type, user_id, guild_id, channel_id, related_tournament_id, related_registration_id, priority, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OPEN');
+        """, (case_id, ticket_type, str(user_id), str(guild_id), str(channel_id), related_tournament_id, related_registration_id, priority))
+        
+        t_id = cursor.lastrowid
+        cursor.execute("SELECT * FROM support_tickets WHERE ticket_id = ?;", (t_id,))
+        row = cursor.fetchone()
+        conn.commit()
+        return dict(row)
+
+async def create_support_ticket(
+    case_id: str,
+    ticket_type: str,
+    user_id: str,
+    guild_id: str,
+    channel_id: str,
+    related_tournament_id: int | None = None,
+    related_registration_id: int | None = None,
+    priority: str = "NORMAL"
+) -> dict:
+    """Asynchronously record a new support ticket."""
+    return await asyncio.to_thread(
+        _create_support_ticket_sync, case_id, ticket_type, user_id, guild_id, channel_id, related_tournament_id, related_registration_id, priority
+    )
+
+def _get_support_ticket_by_case_id_sync(case_id: str) -> dict | None:
+    """Fetch support ticket details by Case ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT s.*, t.title as tournament_name 
+            FROM support_tickets s
+            LEFT JOIN tournaments t ON s.related_tournament_id = t.tournament_id
+            WHERE LOWER(s.case_id) = LOWER(?);
+        """, (case_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_support_ticket_by_case_id(case_id: str) -> dict | None:
+    """Asynchronously fetch support ticket details by Case ID."""
+    return await asyncio.to_thread(_get_support_ticket_by_case_id_sync, case_id)
+
+def _get_support_ticket_by_channel_sync(channel_id: str) -> dict | None:
+    """Fetch active support ticket by Discord channel ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT s.*, t.title as tournament_name 
+            FROM support_tickets s
+            LEFT JOIN tournaments t ON s.related_tournament_id = t.tournament_id
+            WHERE s.channel_id = ?;
+        """, (str(channel_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_support_ticket_by_channel(channel_id: str) -> dict | None:
+    """Asynchronously fetch active support ticket by Discord channel ID."""
+    return await asyncio.to_thread(_get_support_ticket_by_channel_sync, channel_id)
+
+def _update_support_ticket_assignment_sync(case_id: str, staff_id: str) -> bool:
+    """Update assigned primary staff member for a support ticket."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE support_tickets 
+            SET assigned_staff_id = ?, status = CASE WHEN status = 'OPEN' THEN 'IN_PROGRESS' ELSE status END, updated_at = CURRENT_TIMESTAMP 
+            WHERE LOWER(case_id) = LOWER(?);
+        """, (str(staff_id), case_id))
+        
+        cursor.execute("""
+            INSERT INTO audit_logs (admin_id, action, details)
+            VALUES (?, 'CLAIM_SUPPORT_TICKET', ?);
+        """, (str(staff_id), f"Assigned staff {staff_id} to Case #{case_id}"))
+        
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def update_support_ticket_assignment(case_id: str, staff_id: str) -> bool:
+    """Asynchronously update assigned primary staff member."""
+    return await asyncio.to_thread(_update_support_ticket_assignment_sync, case_id, staff_id)
+
+def _update_support_ticket_priority_sync(case_id: str, priority: str, staff_id: str) -> bool:
+    """Update priority level for a support ticket."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE support_tickets 
+            SET priority = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE LOWER(case_id) = LOWER(?);
+        """, (priority, case_id))
+        
+        cursor.execute("""
+            INSERT INTO audit_logs (admin_id, action, details)
+            VALUES (?, 'SET_TICKET_PRIORITY', ?);
+        """, (str(staff_id), f"Changed priority to '{priority}' for Case #{case_id}"))
+        
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def update_support_ticket_priority(case_id: str, priority: str, staff_id: str) -> bool:
+    """Asynchronously update ticket priority level."""
+    return await asyncio.to_thread(_update_support_ticket_priority_sync, case_id, priority, staff_id)
+
+def _add_support_ticket_note_sync(case_id: str, staff_id: str, note_text: str) -> bool:
+    """Add an internal staff note to a support case."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO support_ticket_notes (case_id, staff_id, note_text)
+            VALUES (?, ?, ?);
+        """, (case_id, str(staff_id), note_text))
+        
+        cursor.execute("""
+            INSERT INTO audit_logs (admin_id, action, details)
+            VALUES (?, 'ADD_TICKET_NOTE', ?);
+        """, (str(staff_id), f"Added internal note to Case #{case_id}"))
+        
+        conn.commit()
+        return True
+
+async def add_support_ticket_note(case_id: str, staff_id: str, note_text: str) -> bool:
+    """Asynchronously add an internal staff note to a support case."""
+    return await asyncio.to_thread(_add_support_ticket_note_sync, case_id, staff_id, note_text)
+
+def _close_support_ticket_sync(case_id: str, staff_id: str, resolution: str, close_reason: str) -> bool:
+    """Mark support ticket as CLOSED and save resolution details."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE support_tickets 
+            SET status = 'CLOSED', closed_at = CURRENT_TIMESTAMP, resolution = ?, close_reason = ?, updated_at = CURRENT_TIMESTAMP 
+            WHERE LOWER(case_id) = LOWER(?);
+        """, (resolution, close_reason, case_id))
+        
+        cursor.execute("""
+            INSERT INTO audit_logs (admin_id, action, details)
+            VALUES (?, 'CLOSE_SUPPORT_TICKET', ?);
+        """, (str(staff_id), f"Closed Case #{case_id}. Resolution: {resolution} (Reason: {close_reason})"))
+        
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def close_support_ticket(case_id: str, staff_id: str, resolution: str, close_reason: str) -> bool:
+    """Asynchronously mark support ticket as CLOSED."""
+    return await asyncio.to_thread(_close_support_ticket_sync, case_id, staff_id, resolution, close_reason)
+
+def _save_support_transcript_sync(case_id: str, transcript_text: str) -> bool:
+    """Store raw support transcript in database."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO support_transcripts (case_id, transcript_text)
+            VALUES (?, ?);
+        """, (case_id, transcript_text))
+        conn.commit()
+        return True
+
+async def save_support_transcript(case_id: str, transcript_text: str) -> bool:
+    """Asynchronously store raw support transcript."""
+    return await asyncio.to_thread(_save_support_transcript_sync, case_id, transcript_text)
+
+def _get_user_active_support_tickets_sync(user_id: str, ticket_type: str | None = None) -> list[dict]:
+    """Fetch all open/in_progress support tickets for a user."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        if ticket_type:
+            cursor.execute("""
+                SELECT * FROM support_tickets 
+                WHERE user_id = ? AND status != 'CLOSED' AND ticket_type = ?;
+            """, (str(user_id), ticket_type))
+        else:
+            cursor.execute("""
+                SELECT * FROM support_tickets 
+                WHERE user_id = ? AND status != 'CLOSED';
+            """, (str(user_id),))
+        return [dict(row) for row in cursor.fetchall()]
+
+async def get_user_active_support_tickets(user_id: str, ticket_type: str | None = None) -> list[dict]:
+    """Asynchronously fetch active support tickets for a user."""
+    return await asyncio.to_thread(_get_user_active_support_tickets_sync, user_id, ticket_type)
+
+def _get_user_all_registrations_sync(user_id: str) -> list[dict]:
+    """Fetch all team registrations created by a Discord user ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ticket_id, registration_code, tournament_name, team_name, captain_name, status, created_at, updated_at 
+            FROM tickets 
+            WHERE creator_id = ? OR captain_discord_id = ? 
+            ORDER BY ticket_id DESC;
+        """, (str(user_id), str(user_id)))
+        return [dict(row) for row in cursor.fetchall()]
+
+async def get_user_all_registrations(user_id: str) -> list[dict]:
+    """Asynchronously fetch all registrations for a Discord user."""
+    return await asyncio.to_thread(_get_user_all_registrations_sync, user_id)
+
+def _get_user_all_cases_sync(user_id: str) -> list[dict]:
+    """Fetch all support tickets created by a Discord user ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT s.*, t.title as tournament_name 
+            FROM support_tickets s
+            LEFT JOIN tournaments t ON s.related_tournament_id = t.tournament_id
+            WHERE s.user_id = ? 
+            ORDER BY s.ticket_id DESC;
+        """, (str(user_id),))
+        return [dict(row) for row in cursor.fetchall()]
+
+async def get_user_all_cases(user_id: str) -> list[dict]:
+    """Asynchronously fetch all support tickets for a user."""
+    return await asyncio.to_thread(_get_user_all_cases_sync, user_id)

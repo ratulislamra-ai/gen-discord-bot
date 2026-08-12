@@ -8,7 +8,10 @@ from database.db import (
     get_platform_stats,
     get_public_matches,
     get_tournament_matches,
-    get_tournament_standings
+    get_tournament_standings,
+    get_user_all_registrations,
+    get_user_all_cases,
+    get_support_ticket_by_case_id
 )
 
 router = APIRouter(prefix="/api/public", tags=["Public Website Endpoints"])
@@ -81,4 +84,24 @@ async def get_public_match_list():
     """Return public match records (live, upcoming, completed)."""
     matches = await get_public_matches()
     return matches
+
+@router.get("/user/registrations", response_model=List[Dict[str, Any]], summary="Get User Registrations")
+async def get_user_registrations_api(user_id: str):
+    """Return team registrations created by a Discord user ID (sanitized)."""
+    regs = await get_user_all_registrations(user_id)
+    return regs
+
+@router.get("/user/cases", response_model=List[Dict[str, Any]], summary="Get User Support Cases")
+async def get_user_cases_api(user_id: str):
+    """Return support cases created by a Discord user ID."""
+    cases = await get_user_all_cases(user_id)
+    return cases
+
+@router.get("/user/cases/{case_id}", summary="Get Single Case Overview")
+async def get_user_single_case_api(case_id: str, user_id: str):
+    """Return single support case overview if user_id matches case owner."""
+    case_data = await get_support_ticket_by_case_id(case_id)
+    if not case_data or case_data.get("user_id") != str(user_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found or unauthorized.")
+    return case_data
 
