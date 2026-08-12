@@ -635,7 +635,7 @@ def _init_db_sync():
         if "logo_url" not in t_cols:
             cursor.execute("ALTER TABLE tournaments ADD COLUMN logo_url TEXT;")
         if "updated_at" not in t_cols:
-            cursor.execute("ALTER TABLE tournaments ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+            cursor.execute("ALTER TABLE tournaments ADD COLUMN updated_at TIMESTAMP;")
         if "stream_url" not in t_cols:
             cursor.execute("ALTER TABLE tournaments ADD COLUMN stream_url TEXT;")
         if "stream_platform" not in t_cols:
