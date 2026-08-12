@@ -68,7 +68,7 @@ class GENBot(commands.Bot):
 
         # 3. Load extension cogs
         logger.info("Loading bot extensions (cogs)...")
-        cogs = ["cogs.general", "cogs.registration", "cogs.support"]
+        cogs = ["cogs.general", "cogs.registration", "cogs.support", "cogs.identity"]
         for cog in cogs:
             try:
                 await self.load_extension(cog)

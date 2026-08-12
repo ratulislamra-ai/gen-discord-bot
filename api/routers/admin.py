@@ -17,10 +17,32 @@ from database.db import (
     log_admin_action,
     get_admin_audit_logs,
     generate_tournament_bracket,
-    update_match_result
+    update_match_result,
+    set_player_verification_status,
+    set_team_verification_status
 )
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Dashboard Endpoints"], dependencies=[Depends(verify_api_key)])
+
+@router.post("/players/{player_id}/verify", summary="Verify or Suspend Player")
+async def verify_player_api(player_id: int, payload: Dict[str, Any]):
+    """Admin endpoint to set player verification status (VERIFIED, UNVERIFIED, SUSPENDED)."""
+    status_val = payload.get("status", "VERIFIED")
+    success = await set_player_verification_status(player_id, status_val)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Player ID {player_id} not found.")
+    await log_admin_action("API_ADMIN", "VERIFY_PLAYER", details=f"Set player #{player_id} status to {status_val}")
+    return {"message": f"Player verification status set to {status_val}.", "player_id": player_id, "status": status_val}
+
+@router.post("/teams/{team_id}/verify", summary="Verify or Suspend Team")
+async def verify_team_api(team_id: int, payload: Dict[str, Any]):
+    """Admin endpoint to set team verification status (VERIFIED, PENDING, UNVERIFIED, SUSPENDED)."""
+    status_val = payload.get("status", "VERIFIED")
+    success = await set_team_verification_status(team_id, status_val)
+    if not success:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Team ID {team_id} not found.")
+    await log_admin_action("API_ADMIN", "VERIFY_TEAM", details=f"Set team #{team_id} status to {status_val}")
+    return {"message": f"Team verification status set to {status_val}.", "team_id": team_id, "status": status_val}
 
 @router.get("/stats", response_model=Dict[str, Any], summary="Get Admin Dashboard Overview Metrics")
 async def get_admin_stats():

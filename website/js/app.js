@@ -12,6 +12,7 @@ const App = {
     discordInviteUrl: '',
     autoRefreshInterval: null,
     adminApiKey: sessionStorage.getItem('gen_admin_api_key') || '',
+    userDiscordId: localStorage.getItem('gen_user_discord_id') || '',
     adminTab: 'overview',
     activeTournamentSlug: '',
 
@@ -28,7 +29,7 @@ const App = {
         }
         // Poll every 15 seconds for automatic Discord -> Database -> Website sync
         this.autoRefreshInterval = setInterval(async () => {
-            if (['home', 'tournaments', 'teams', 'matches', 'brackets', 'leaderboards'].includes(this.currentView)) {
+            if (['home', 'tournaments', 'teams', 'players', 'matches', 'brackets', 'leaderboards'].includes(this.currentView)) {
                 await this.refreshActiveViewData();
             }
         }, 15000);
@@ -47,6 +48,8 @@ const App = {
                 }
             } else if (this.currentView === 'teams') {
                 await this.renderTeamsView();
+            } else if (this.currentView === 'players') {
+                await this.renderPlayersView();
             } else if (this.currentView === 'tournaments') {
                 await this.renderTournamentsView();
             } else if (this.currentView === 'matches') {
@@ -148,6 +151,9 @@ const App = {
             case 'teams':
                 await this.renderTeamsView();
                 break;
+            case 'players':
+                await this.renderPlayersView();
+                break;
             case 'matches':
                 await this.renderMatchesView();
                 break;
@@ -156,6 +162,9 @@ const App = {
                 break;
             case 'leaderboards':
                 await this.renderLeaderboardsView();
+                break;
+            case 'dashboard':
+                await this.renderDashboardView();
                 break;
             case 'admin':
                 await this.renderAdminView();
@@ -386,55 +395,44 @@ const App = {
     // RENDER TEAMS VIEW
     async renderTeamsView() {
         const container = document.getElementById('app-content');
-        const tournaments = await Api.getTournaments();
-        let allApprovedTeams = [];
-
-        for (const t of tournaments) {
-            const teams = await Api.getApprovedTeams(t.slug);
-            allApprovedTeams = allApprovedTeams.concat(teams);
-        }
+        const teams = await Api.getTeams();
 
         container.innerHTML = `
             <div style="margin-bottom: 3rem;">
-                <div class="hero-badge">🛡️ VERIFIED ROSTERS</div>
+                <div class="hero-badge">🛡️ ESPORTS TEAMS</div>
                 <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    APPROVED <span class="gradient-text">TEAMS & ROSTERS</span>
+                    REGISTERED <span class="gradient-text">TEAMS & DIRECTORY</span>
                 </h1>
                 <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
-                    Official team profiles and verified player rosters approved by GEN Esports administrators.
+                    Explore official esports team profiles and verified rosters.
                 </p>
             </div>
 
             <div class="teams-grid">
-                ${allApprovedTeams.length === 0 ? `
+                ${teams.length === 0 ? `
                     <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
                         <div style="font-size: 3rem; margin-bottom: 1rem;">🛡️</div>
-                        <h3>No Approved Teams Yet</h3>
-                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Approved team rosters will automatically post here upon admin review.</p>
+                        <h3>No Teams Listed</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Team profiles will automatically post here upon registration.</p>
                     </div>
-                ` : allApprovedTeams.map(team => {
-                    const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/64?text=GEN';
-                    const encodedTeam = encodeURIComponent(JSON.stringify(team));
+                ` : teams.map(tm => {
+                    const isVerified = tm.verification_status === 'VERIFIED';
+                    const logoSrc = tm.logo_url ? (tm.logo_url.startsWith('http') ? tm.logo_url : `/${tm.logo_url}`) : 'https://via.placeholder.com/64?text=TEAM';
                     return `
-                        <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${encodedTeam}')">
+                        <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${tm.slug}')">
                             <div class="team-card-header">
-                                <img src="${logoSrc}" alt="${team.team_name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
+                                <img src="${logoSrc}" alt="${tm.name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
                                 <div>
-                                    <div class="team-info-name">${team.team_name}</div>
-                                    <div class="team-info-captain">👑 Captain: ${team.captain_name}</div>
+                                    <div class="team-info-name">${tm.name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</div>
+                                    <div class="team-info-captain">🏷️ ID: ${tm.public_id}</div>
                                 </div>
                             </div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem;">
-                                🏆 ${team.tournament}
+                            <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
+                                🎮 Game: <strong>${tm.game || 'VALORANT'}</strong> | Region: <strong>${tm.region || 'South Asia'}</strong>
                             </div>
-                            <div class="roster-grid">
-                                ${(team.roster || []).map(p => `
-                                    <div class="roster-row">
-                                        <span class="roster-role">${p.role}</span>
-                                        <span class="roster-ign">${p.ign}</span>
-                                    </div>
-                                `).join('')}
-                            </div>
+                            <button class="btn btn-secondary" style="width: 100%; margin-top: 0.75rem; font-size: 0.85rem;">
+                                👁️ View Team Roster & History
+                            </button>
                         </div>
                     `;
                 }).join('')}
@@ -442,32 +440,124 @@ const App = {
         `;
     },
 
-    showTeamProfileModal(encodedTeamJson) {
-        try {
-            const team = JSON.parse(decodeURIComponent(encodedTeamJson));
-            const logoSrc = team.team_logo_url ? (team.team_logo_url.startsWith('http') ? team.team_logo_url : `/${team.team_logo_url}`) : 'https://via.placeholder.com/80?text=GEN';
+    async showTeamProfileModal(slug) {
+        const team = await Api.getTeamProfile(slug);
+        if (!team) return;
 
-            this.showModal(`
-                <div style="text-align: center; margin-bottom: 1.5rem;">
-                    <img src="${logoSrc}" style="width: 80px; height: 80px; border-radius: 12px; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/80?text=TEAM'">
-                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${team.team_name}</h2>
-                    <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏆 ${team.tournament}</div>
-                    <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">👑 Captain: ${team.captain_name}</div>
-                </div>
+        const isVerified = team.verification_status === 'VERIFIED';
+        const logoSrc = team.logo_url ? (team.logo_url.startsWith('http') ? team.logo_url : `/${team.logo_url}`) : 'https://via.placeholder.com/80?text=TEAM';
 
-                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">👥 Active Roster</h4>
-                <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.3); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-card);">
-                    ${(team.roster || []).map(p => `
-                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                            <span style="font-weight: 700; color: var(--accent-cyan); font-size: 0.85rem;">${p.role}</span>
-                            <span style="font-weight: 600;">${p.ign}</span>
+        this.showModal(`
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+                <img src="${logoSrc}" style="width: 80px; height: 80px; border-radius: 12px; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/80?text=TEAM'">
+                <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${team.name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h2>
+                <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏷️ Public ID: ${team.public_id}</div>
+                <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">🎮 ${team.game || 'VALORANT'} • 🌍 ${team.region || 'South Asia'}</div>
+            </div>
+
+            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">👥 Active Roster (${(team.roster || []).length})</h4>
+            <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.3); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
+                ${(team.roster || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No roster members found.</div>' : (team.roster || []).map(p => `
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                        <span style="font-weight: 700; color: var(--accent-cyan); font-size: 0.85rem;">${p.role}</span>
+                        <span style="font-weight: 600;">${p.display_name || p.username} (${p.public_id})</span>
+                    </div>
+                `).join('')}
+            </div>
+
+            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">📜 Tournament History</h4>
+            <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); font-size: 0.9rem;">
+                ${(team.tournament_history || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No tournament history recorded yet.</div>' : (team.tournament_history || []).map(h => `
+                    <div style="display: flex; justify-content: space-between; padding: 0.4rem 0;">
+                        <span>🏆 <strong>${h.tournament_name}</strong></span>
+                        <span class="badge badge-open">${h.status}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `);
+    },
+
+    // RENDER PLAYERS VIEW
+    async renderPlayersView() {
+        const container = document.getElementById('app-content');
+        const players = await Api.getPlayers();
+
+        container.innerHTML = `
+            <div style="margin-bottom: 3rem;">
+                <div class="hero-badge">👤 PLAYER DIRECTORY</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
+                    VERIFIED <span class="gradient-text">PLAYERS</span>
+                </h1>
+                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
+                    Browse active competitor profiles, public IDs, and game statistics.
+                </p>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.5rem;">
+                ${players.length === 0 ? `
+                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                        <div style="font-size: 3rem; margin-bottom: 1rem;">👤</div>
+                        <h3>No Players Registered</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Player profiles will automatically post here upon registration.</p>
+                    </div>
+                ` : players.map(p => {
+                    const isVerified = p.verification_status === 'VERIFIED';
+                    const avatarSrc = p.avatar_url || 'https://via.placeholder.com/64?text=GEN';
+                    return `
+                        <div class="glass-panel" style="padding: 1.25rem; text-align: center; cursor: pointer;" onclick="App.showPlayerProfileModal('${p.public_id}')">
+                            <img src="${avatarSrc}" style="width: 64px; height: 64px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/64?text=GEN'">
+                            <h3 style="font-family: var(--font-heading); font-size: 1.2rem;">${p.display_name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h3>
+                            <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; margin-top: 0.2rem;">🏷️ ${p.public_id}</div>
+                            <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">🎮 ${p.primary_game || 'VALORANT'}</div>
                         </div>
-                    `).join('')}
-                </div>
-            `);
-        } catch (e) {
-            console.error('Failed to parse team profile JSON:', e);
-        }
+                    `;
+                }).join('')}
+            </div>
+        `;
+    },
+
+    async showPlayerProfileModal(slug) {
+        const player = await Api.getPlayerProfile(slug);
+        if (!player) return;
+
+        const isVerified = player.verification_status === 'VERIFIED';
+        const avatarSrc = player.avatar_url || 'https://via.placeholder.com/80?text=GEN';
+        const stats = player.stats || {};
+
+        this.showModal(`
+            <div style="text-align: center; margin-bottom: 1.5rem;">
+                <img src="${avatarSrc}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/80?text=GEN'">
+                <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${player.display_name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h2>
+                <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏷️ Public ID: ${player.public_id}</div>
+                <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">🎮 Primary Game: ${player.primary_game || 'VALORANT'}</div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.03); padding: 1rem; border-radius: var(--radius-md); text-align: center;">
+                <div><span style="color: var(--text-muted); font-size: 0.8rem;">MATCHES</span><br><strong style="font-size: 1.2rem;">${stats.matches_played ?? 0}</strong></div>
+                <div><span style="color: var(--text-muted); font-size: 0.8rem;">WINS</span><br><strong style="font-size: 1.2rem; color: var(--accent-green);">${stats.wins ?? 0}</strong></div>
+                <div><span style="color: var(--text-muted); font-size: 0.8rem;">WIN RATE</span><br><strong style="font-size: 1.2rem; color: var(--accent-gold);">${stats.win_rate ?? 0}%</strong></div>
+            </div>
+
+            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">🛡️ Active Teams</h4>
+            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
+                ${(player.teams || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No active team membership.</div>' : (player.teams || []).map(t => `
+                    <div style="display: flex; justify-content: space-between; padding: 0.4rem 0;">
+                        <span>🛡️ <strong>${t.team_name}</strong></span>
+                        <span style="color: var(--accent-cyan); font-weight: 700; font-size: 0.85rem;">${t.role}</span>
+                    </div>
+                `).join('')}
+            </div>
+
+            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">🏅 Achievements</h4>
+            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-card);">
+                ${(player.achievements || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No achievements recorded yet.</div>' : (player.achievements || []).map(a => `
+                    <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.4rem 0;">
+                        <span style="font-size: 1.5rem;">${a.badge_icon || '🏆'}</span>
+                        <div><strong>${a.title}</strong><br><span style="font-size: 0.8rem; color: var(--text-muted);">${a.description || ''}</span></div>
+                    </div>
+                `).join('')}
+            </div>
+        `);
     },
 
     // RENDER MATCHES VIEW
@@ -648,6 +738,109 @@ const App = {
     async changeLeaderboardTournament(slug) {
         this.activeTournamentSlug = slug;
         await this.renderLeaderboardsView();
+    },
+
+    // RENDER DASHBOARD VIEW
+    async renderDashboardView() {
+        const container = document.getElementById('app-content');
+
+        if (!this.userDiscordId) {
+            container.innerHTML = `
+                <div style="max-width: 450px; margin: 4rem auto;" class="glass-panel">
+                    <div style="text-align: center; margin-bottom: 1.5rem;">
+                        <div style="font-size: 3rem; margin-bottom: 0.5rem;">👤</div>
+                        <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">Player Dashboard</h2>
+                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.25rem;">Enter your Discord User ID or Code to view your profile & teams.</p>
+                    </div>
+
+                    <form onsubmit="App.loginUserDashboard(event)">
+                        <div class="form-group" style="margin-bottom: 1.5rem;">
+                            <label>Discord User ID / Player ID</label>
+                            <input type="text" id="user-id-input" class="form-input" placeholder="e.g. 123456789012345678" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary" style="width: 100%;">
+                            🔓 Access Dashboard
+                        </button>
+                    </form>
+                </div>
+            `;
+            return;
+        }
+
+        const data = await Api.getUserDashboard(this.userDiscordId);
+        const profile = data ? data.profile : null;
+        const regs = data ? (data.registrations || []) : [];
+        const cases = data ? (data.cases || []) : [];
+
+        container.innerHTML = `
+            <div style="margin-bottom: 2.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <div class="hero-badge">👤 PLAYER DASHBOARD</div>
+                    <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                        WELCOME BACK, <span class="gradient-text">${profile ? profile.display_name : 'COMPETITOR'}</span>
+                    </h1>
+                </div>
+                <button onclick="App.logoutUserDashboard()" class="btn btn-secondary" style="font-size: 0.85rem;">
+                    🔒 Switch Account
+                </button>
+            </div>
+
+            <div class="stats-banner glass-panel" style="margin-bottom: 2.5rem;">
+                <div class="stat-box"><div class="stat-val" style="color: var(--accent-cyan);">${profile ? profile.public_id : 'GEN-P-000000'}</div><div class="stat-lbl">Public ID</div></div>
+                <div class="stat-box"><div class="stat-val" style="color: var(--accent-gold);">${regs.length}</div><div class="stat-lbl">Registrations</div></div>
+                <div class="stat-box"><div class="stat-val" style="color: var(--accent-green);">${profile && profile.teams ? profile.teams.length : 0}</div><div class="stat-lbl">Active Teams</div></div>
+                <div class="stat-box"><div class="stat-val">${cases.length}</div><div class="stat-lbl">Support Cases</div></div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div class="glass-panel" style="padding: 1.5rem;">
+                    <h3 style="font-family: var(--font-heading); font-size: 1.3rem; margin-bottom: 1rem;">📋 My Registrations (${regs.length})</h3>
+                    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        ${regs.length === 0 ? '<div style="color: var(--text-muted);">No registrations found. Register via Discord!</div>' : regs.map(r => `
+                            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                                <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.25rem;">
+                                    <span>🛡️ ${r.team_name}</span>
+                                    <span class="badge ${r.status === 'APPROVED' ? 'badge-open' : 'badge-closed'}">${r.status}</span>
+                                </div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">🏆 ${r.tournament_name} • Code: <code>${r.registration_code || r.ticket_id}</code></div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+
+                <div class="glass-panel" style="padding: 1.5rem;">
+                    <h3 style="font-family: var(--font-heading); font-size: 1.3rem; margin-bottom: 1rem;">🎧 My Support Cases (${cases.length})</h3>
+                    <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+                        ${cases.length === 0 ? '<div style="color: var(--text-muted);">No support cases on record.</div>' : cases.map(c => `
+                            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                                <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.25rem;">
+                                    <span>🎧 Case #${c.case_id}</span>
+                                    <span class="badge ${c.status === 'CLOSED' ? 'badge-closed' : 'badge-open'}">${c.status}</span>
+                                </div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">📂 Category: <code>${c.ticket_type}</code> • Priority: <code>${c.priority}</code></div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            </div>
+        `;
+    },
+
+    loginUserDashboard(e) {
+        e.preventDefault();
+        const input = document.getElementById('user-id-input');
+        const id = input ? input.value.trim() : '';
+        if (id) {
+            this.userDiscordId = id;
+            localStorage.setItem('gen_user_discord_id', id);
+            this.renderDashboardView();
+        }
+    },
+
+    logoutUserDashboard() {
+        this.userDiscordId = '';
+        localStorage.removeItem('gen_user_discord_id');
+        this.renderDashboardView();
     },
 
     // RENDER ADMIN VIEW

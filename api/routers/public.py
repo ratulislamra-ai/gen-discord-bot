@@ -11,7 +11,11 @@ from database.db import (
     get_tournament_standings,
     get_user_all_registrations,
     get_user_all_cases,
-    get_support_ticket_by_case_id
+    get_support_ticket_by_case_id,
+    get_all_players_public,
+    get_player_full_profile,
+    get_all_teams_public,
+    get_team_full_profile
 )
 
 router = APIRouter(prefix="/api/public", tags=["Public Website Endpoints"])
@@ -85,6 +89,34 @@ async def get_public_match_list():
     matches = await get_public_matches()
     return matches
 
+@router.get("/players", response_model=List[Dict[str, Any]], summary="Get Public Players Directory")
+async def get_players_directory_api():
+    """Return public players directory list (sanitized)."""
+    players = await get_all_players_public()
+    return players
+
+@router.get("/players/{slug}", response_model=Dict[str, Any], summary="Get Public Player Profile")
+async def get_player_profile_api(slug: str):
+    """Return single public player profile (sanitized: NO Discord ID, NO phone, NO private support data)."""
+    profile = await get_player_full_profile(slug)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Player '{slug}' not found.")
+    return profile
+
+@router.get("/teams", response_model=List[Dict[str, Any]], summary="Get Public Teams Directory")
+async def get_teams_directory_api():
+    """Return public teams directory list (sanitized)."""
+    teams = await get_all_teams_public()
+    return teams
+
+@router.get("/teams/{slug}", response_model=Dict[str, Any], summary="Get Public Team Profile")
+async def get_team_profile_api(slug: str):
+    """Return single public team profile with active roster & tournament history."""
+    profile = await get_team_full_profile(slug)
+    if not profile:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Team '{slug}' not found.")
+    return profile
+
 @router.get("/user/registrations", response_model=List[Dict[str, Any]], summary="Get User Registrations")
 async def get_user_registrations_api(user_id: str):
     """Return team registrations created by a Discord user ID (sanitized)."""
@@ -97,11 +129,16 @@ async def get_user_cases_api(user_id: str):
     cases = await get_user_all_cases(user_id)
     return cases
 
-@router.get("/user/cases/{case_id}", summary="Get Single Case Overview")
-async def get_user_single_case_api(case_id: str, user_id: str):
-    """Return single support case overview if user_id matches case owner."""
-    case_data = await get_support_ticket_by_case_id(case_id)
-    if not case_data or case_data.get("user_id") != str(user_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found or unauthorized.")
-    return case_data
+@router.get("/user/dashboard", response_model=Dict[str, Any], summary="Get Full User Dashboard Overview")
+async def get_user_dashboard_api(user_id: str):
+    """Return user profile, active teams, registrations, and support cases for dashboard rendering."""
+    profile = await get_player_full_profile(user_id)
+    regs = await get_user_all_registrations(user_id)
+    cases = await get_user_all_cases(user_id)
+    
+    return {
+        "profile": profile,
+        "registrations": regs,
+        "cases": cases
+    }
 

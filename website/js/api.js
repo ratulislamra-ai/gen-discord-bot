@@ -238,6 +238,76 @@ const Api = {
     },
 
     /**
+     * Fetch public players directory
+     */
+    async getPlayers() {
+        try {
+            const res = await fetch(`${API_BASE}/public/players`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch public players:', err);
+            return [];
+        }
+    },
+
+    /**
+     * Fetch public player profile
+     */
+    async getPlayerProfile(slug) {
+        try {
+            const res = await fetch(`${API_BASE}/public/players/${encodeURIComponent(slug)}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Failed to fetch player profile ${slug}:`, err);
+            return null;
+        }
+    },
+
+    /**
+     * Fetch public teams directory
+     */
+    async getTeams() {
+        try {
+            const res = await fetch(`${API_BASE}/public/teams`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch public teams:', err);
+            return [];
+        }
+    },
+
+    /**
+     * Fetch public team profile
+     */
+    async getTeamProfile(slug) {
+        try {
+            const res = await fetch(`${API_BASE}/public/teams/${encodeURIComponent(slug)}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Failed to fetch team profile ${slug}:`, err);
+            return null;
+        }
+    },
+
+    /**
+     * Fetch full user dashboard data
+     */
+    async getUserDashboard(userId) {
+        try {
+            const res = await fetch(`${API_BASE}/public/user/dashboard?user_id=${encodeURIComponent(userId)}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch user dashboard:', err);
+            return null;
+        }
+    },
+
+    /**
      * Open tournament registration via Admin API
      */
     async openRegistration(apiKey, tournamentId) {

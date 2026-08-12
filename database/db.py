@@ -288,6 +288,110 @@ def _init_db_sync():
             );
         """)
 
+        # players table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS players (
+                player_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT UNIQUE NOT NULL,
+                discord_user_id TEXT UNIQUE NOT NULL,
+                username TEXT NOT NULL,
+                display_name TEXT NOT NULL,
+                avatar_url TEXT,
+                country TEXT,
+                bio TEXT,
+                primary_game TEXT DEFAULT 'VALORANT',
+                verification_status TEXT DEFAULT 'UNVERIFIED',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # teams table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS teams (
+                team_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_id TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
+                logo_url TEXT,
+                captain_player_id INTEGER,
+                description TEXT,
+                game TEXT DEFAULT 'VALORANT',
+                region TEXT DEFAULT 'South Asia',
+                verification_status TEXT DEFAULT 'UNVERIFIED',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # team_members table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS team_members (
+                membership_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                player_id INTEGER NOT NULL,
+                role TEXT DEFAULT 'PLAYER',
+                status TEXT DEFAULT 'ACTIVE',
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                left_at TIMESTAMP DEFAULT NULL,
+                UNIQUE(team_id, player_id)
+            );
+        """)
+
+        # team_invitations table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS team_invitations (
+                invitation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team_id INTEGER NOT NULL,
+                inviter_player_id INTEGER NOT NULL,
+                invitee_discord_id TEXT NOT NULL,
+                invitee_player_id INTEGER,
+                status TEXT DEFAULT 'PENDING',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # player_stats table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS player_stats (
+                stat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                player_id INTEGER UNIQUE NOT NULL,
+                matches_played INTEGER DEFAULT 0,
+                wins INTEGER DEFAULT 0,
+                losses INTEGER DEFAULT 0,
+                tournaments_played INTEGER DEFAULT 0,
+                tournament_wins INTEGER DEFAULT 0,
+                mvp_count INTEGER DEFAULT 0
+            );
+        """)
+
+        # achievements table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS achievements (
+                achievement_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL,
+                entity_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT,
+                badge_icon TEXT DEFAULT '🏆',
+                awarded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # tournament_roster_snapshots table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tournament_roster_snapshots (
+                snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket_id INTEGER NOT NULL,
+                tournament_id INTEGER,
+                team_id INTEGER,
+                player_id INTEGER,
+                player_role TEXT,
+                ign TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         # Safely migrate schema: add tournament & match columns if missing
         cursor.execute("PRAGMA table_info(tournaments);")
         t_cols = [col[1] for col in cursor.fetchall()]
@@ -314,7 +418,47 @@ def _init_db_sync():
         if "logo_url" not in t_cols:
             cursor.execute("ALTER TABLE tournaments ADD COLUMN logo_url TEXT;")
         if "updated_at" not in t_cols:
-            cursor.execute("ALTER TABLE tournaments ADD COLUMN updated_at TIMESTAMP;")
+            cursor.execute("ALTER TABLE tournaments ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+
+        cursor.execute("PRAGMA table_info(players);")
+        p_cols = [col[1] for col in cursor.fetchall()]
+        if "public_id" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN public_id TEXT;")
+        if "discord_user_id" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN discord_user_id TEXT;")
+        if "username" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN username TEXT;")
+        if "display_name" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN display_name TEXT;")
+        if "avatar_url" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN avatar_url TEXT;")
+        if "country" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN country TEXT;")
+        if "bio" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN bio TEXT;")
+        if "primary_game" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN primary_game TEXT DEFAULT 'VALORANT';")
+        if "verification_status" not in p_cols:
+            cursor.execute("ALTER TABLE players ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED';")
+
+        cursor.execute("PRAGMA table_info(teams);")
+        tm_cols = [col[1] for col in cursor.fetchall()]
+        if "public_id" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN public_id TEXT;")
+        if "slug" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN slug TEXT;")
+        if "logo_url" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN logo_url TEXT;")
+        if "description" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN description TEXT;")
+        if "captain_player_id" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN captain_player_id INTEGER;")
+        if "game" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN game TEXT DEFAULT 'VALORANT';")
+        if "region" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN region TEXT DEFAULT 'South Asia';")
+        if "verification_status" not in tm_cols:
+            cursor.execute("ALTER TABLE teams ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED';")
 
         cursor.execute("PRAGMA table_info(matches);")
         m_cols = [col[1] for col in cursor.fetchall()]
@@ -1606,3 +1750,286 @@ def _get_user_all_cases_sync(user_id: str) -> list[dict]:
 async def get_user_all_cases(user_id: str) -> list[dict]:
     """Asynchronously fetch all support tickets for a user."""
     return await asyncio.to_thread(_get_user_all_cases_sync, user_id)
+
+# ==============================================================================
+# PLAYER & TEAM IDENTITY FUNCTIONS
+# ==============================================================================
+
+def _get_or_create_player_sync(discord_user_id: str, username: str = "", display_name: str = "", avatar_url: str = "", primary_game: str = "VALORANT") -> dict:
+    """Get existing player by discord_user_id or create a new player entry with public GEN-P-XXXXXX ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM players WHERE discord_user_id = ?;", (str(discord_user_id),))
+        row = cursor.fetchone()
+        if row:
+            player = dict(row)
+            # Update display info if changed
+            if (display_name and display_name != player["display_name"]) or (avatar_url and avatar_url != player["avatar_url"]):
+                cursor.execute("""
+                    UPDATE players 
+                    SET display_name = COALESCE(NULLIF(?, ''), display_name),
+                        avatar_url = COALESCE(NULLIF(?, ''), avatar_url),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE player_id = ?;
+                """, (display_name, avatar_url, player["player_id"]))
+                conn.commit()
+                cursor.execute("SELECT * FROM players WHERE player_id = ?;", (player["player_id"],))
+                return dict(cursor.fetchone())
+            return player
+
+        # Generate next public player ID
+        cursor.execute("SELECT COUNT(*) FROM players;")
+        count = cursor.fetchone()[0] + 1
+        public_id = f"GEN-P-{count:06d}"
+        while True:
+            cursor.execute("SELECT COUNT(*) FROM players WHERE public_id = ?;", (public_id,))
+            if cursor.fetchone()[0] == 0:
+                break
+            count += 1
+            public_id = f"GEN-P-{count:06d}"
+
+        u_name = username or f"User_{discord_user_id[:6]}"
+        d_name = display_name or u_name
+
+        cursor.execute("PRAGMA table_info(players);")
+        p_cols = [col[1] for col in cursor.fetchall()]
+
+        fields = ["public_id", "discord_user_id", "username", "display_name", "avatar_url", "primary_game", "verification_status"]
+        vals = [public_id, str(discord_user_id), u_name, d_name, avatar_url, primary_game, 'UNVERIFIED']
+
+        if "ign" in p_cols:
+            fields.append("ign")
+            vals.append(d_name)
+        if "discord_id" in p_cols:
+            fields.append("discord_id")
+            vals.append(str(discord_user_id))
+
+        placeholders = ", ".join(["?"] * len(fields))
+        field_str = ", ".join(fields)
+        cursor.execute(f"INSERT INTO players ({field_str}) VALUES ({placeholders});", vals)
+        
+        p_id = cursor.lastrowid
+        
+        # Initialize stats table
+        cursor.execute("INSERT OR IGNORE INTO player_stats (player_id) VALUES (?);", (p_id,))
+        
+        conn.commit()
+        cursor.execute("SELECT * FROM players WHERE player_id = ?;", (p_id,))
+        return dict(cursor.fetchone())
+
+async def get_or_create_player(discord_user_id: str, username: str = "", display_name: str = "", avatar_url: str = "", primary_game: str = "VALORANT") -> dict:
+    """Asynchronously get or create a player profile."""
+    return await asyncio.to_thread(_get_or_create_player_sync, discord_user_id, username, display_name, avatar_url, primary_game)
+
+def _get_or_create_team_sync(name: str, captain_player_id: int, game: str = "VALORANT", logo_url: str = "") -> dict:
+    """Get existing team by slug or create new team entry with public GEN-T-XXXXXX ID."""
+    clean_name = name.strip()
+    slug = clean_name.lower().replace(' ', '-')
+    
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM teams WHERE LOWER(slug) = LOWER(?) OR LOWER(name) = LOWER(?);", (slug, clean_name))
+        row = cursor.fetchone()
+        if row:
+            return dict(row)
+
+        cursor.execute("SELECT COUNT(*) FROM teams;")
+        count = cursor.fetchone()[0] + 1
+        public_id = f"GEN-T-{count:06d}"
+        while True:
+            cursor.execute("SELECT COUNT(*) FROM teams WHERE public_id = ?;", (public_id,))
+            if cursor.fetchone()[0] == 0:
+                break
+            count += 1
+            public_id = f"GEN-T-{count:06d}"
+
+        cursor.execute("""
+            INSERT INTO teams (public_id, name, slug, logo_url, captain_player_id, game, verification_status)
+            VALUES (?, ?, ?, ?, ?, ?, 'UNVERIFIED');
+        """, (public_id, clean_name, slug, logo_url, captain_player_id, game))
+        
+        t_id = cursor.lastrowid
+        
+        # Add captain to team_members
+        cursor.execute("""
+            INSERT OR IGNORE INTO team_members (team_id, player_id, role, status)
+            VALUES (?, ?, 'CAPTAIN', 'ACTIVE');
+        """, (t_id, captain_player_id))
+        
+        conn.commit()
+        cursor.execute("SELECT * FROM teams WHERE team_id = ?;", (t_id,))
+        return dict(cursor.fetchone())
+
+async def get_or_create_team(name: str, captain_player_id: int, game: str = "VALORANT", logo_url: str = "") -> dict:
+    """Asynchronously get or create a team identity."""
+    return await asyncio.to_thread(_get_or_create_team_sync, name, captain_player_id, game, logo_url)
+
+def _lock_tournament_roster_snapshot_sync(ticket_id: int) -> bool:
+    """Lock a team's active roster at registration time so future changes do not alter historical records."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tickets WHERE ticket_id = ?;", (ticket_id,))
+        t_row = cursor.fetchone()
+        if not t_row:
+            return False
+        
+        ticket = dict(t_row)
+        cursor.execute("SELECT * FROM roster_players WHERE ticket_id = ?;", (ticket_id,))
+        players = cursor.fetchall()
+        
+        # Create roster snapshot entries
+        for p in players:
+            cursor.execute("""
+                INSERT INTO tournament_roster_snapshots (ticket_id, player_role, ign)
+                VALUES (?, ?, ?);
+            """, (ticket_id, p["player_role"], p["ign"]))
+            
+        conn.commit()
+        return True
+
+async def lock_tournament_roster_snapshot(ticket_id: int) -> bool:
+    """Asynchronously lock a tournament roster snapshot."""
+    return await asyncio.to_thread(_lock_tournament_roster_snapshot_sync, ticket_id)
+
+def _get_player_full_profile_sync(identifier: str) -> dict | None:
+    """Fetch public player profile sanitized for safety (NO Discord ID, NO phone, NO email, NO private support info)."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT player_id, public_id, username, display_name, avatar_url, country, bio, primary_game, verification_status, created_at
+            FROM players 
+            WHERE LOWER(public_id) = LOWER(?) OR LOWER(username) = LOWER(?) OR CAST(player_id AS TEXT) = ? OR discord_user_id = ?;
+        """, (identifier, identifier, identifier, identifier))
+        row = cursor.fetchone()
+        if not row:
+            return None
+        
+        player = dict(row)
+        p_id = player["player_id"]
+
+        # Fetch stats
+        cursor.execute("SELECT * FROM player_stats WHERE player_id = ?;", (p_id,))
+        st_row = cursor.fetchone()
+        stats = dict(st_row) if st_row else {"matches_played": 0, "wins": 0, "losses": 0, "tournaments_played": 0, "tournament_wins": 0, "mvp_count": 0}
+        
+        mp = stats.get("matches_played", 0)
+        w = stats.get("wins", 0)
+        stats["win_rate"] = round((w / mp) * 100, 1) if mp > 0 else 0.0
+
+        player["stats"] = stats
+
+        # Fetch achievements
+        cursor.execute("SELECT title, description, badge_icon, awarded_at FROM achievements WHERE entity_type = 'PLAYER' AND entity_id = ?;", (p_id,))
+        player["achievements"] = [dict(r) for r in cursor.fetchall()]
+
+        # Fetch team memberships
+        cursor.execute("""
+            SELECT tm.role, tm.status, t.public_id as team_public_id, t.name as team_name, t.slug as team_slug, t.logo_url as team_logo
+            FROM team_members tm
+            JOIN teams t ON tm.team_id = t.team_id
+            WHERE tm.player_id = ? AND tm.status = 'ACTIVE';
+        """, (p_id,))
+        player["teams"] = [dict(r) for r in cursor.fetchall()]
+
+        return player
+
+async def get_player_full_profile(identifier: str) -> dict | None:
+    """Asynchronously fetch public player profile."""
+    return await asyncio.to_thread(_get_player_full_profile_sync, identifier)
+
+def _get_team_full_profile_sync(identifier: str) -> dict | None:
+    """Fetch public team profile sanitized for safety."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT team_id, public_id, name, slug, logo_url, description, game, region, verification_status, created_at 
+            FROM teams 
+            WHERE LOWER(slug) = LOWER(?) OR LOWER(public_id) = LOWER(?) OR LOWER(name) = LOWER(?) OR CAST(team_id AS TEXT) = ?;
+        """, (identifier, identifier, identifier, identifier))
+        row = cursor.fetchone()
+        if not row:
+            return None
+
+        team = dict(row)
+        t_id = team["team_id"]
+
+        # Fetch roster
+        cursor.execute("""
+            SELECT tm.role, p.public_id, p.display_name, p.username, p.avatar_url
+            FROM team_members tm
+            JOIN players p ON tm.player_id = p.player_id
+            WHERE tm.team_id = ? AND tm.status = 'ACTIVE';
+        """, (t_id,))
+        team["roster"] = [dict(r) for r in cursor.fetchall()]
+
+        # Fetch achievements
+        cursor.execute("SELECT title, description, badge_icon, awarded_at FROM achievements WHERE entity_type = 'TEAM' AND entity_id = ?;", (t_id,))
+        team["achievements"] = [dict(r) for r in cursor.fetchall()]
+
+        # Fetch tournament history
+        cursor.execute("""
+            SELECT DISTINCT tournament_name, status, created_at 
+            FROM tickets 
+            WHERE status = 'APPROVED' AND LOWER(team_name) = LOWER(?);
+        """, (team["name"],))
+        team["tournament_history"] = [dict(r) for r in cursor.fetchall()]
+
+        return team
+
+async def get_team_full_profile(identifier: str) -> dict | None:
+    """Asynchronously fetch public team profile."""
+    return await asyncio.to_thread(_get_team_full_profile_sync, identifier)
+
+def _get_all_players_public_sync() -> list[dict]:
+    """Fetch sanitized directory list of public players."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT public_id, display_name, username, avatar_url, primary_game, verification_status 
+            FROM players 
+            ORDER BY player_id DESC LIMIT 50;
+        """)
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_all_players_public() -> list[dict]:
+    """Asynchronously fetch public players directory."""
+    return await asyncio.to_thread(_get_all_players_public_sync)
+
+def _get_all_teams_public_sync() -> list[dict]:
+    """Fetch sanitized directory list of public teams."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT public_id, name, slug, logo_url, game, region, verification_status 
+            FROM teams 
+            ORDER BY team_id DESC LIMIT 50;
+        """)
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_all_teams_public() -> list[dict]:
+    """Asynchronously fetch public teams directory."""
+    return await asyncio.to_thread(_get_all_teams_public_sync)
+
+def _set_player_verification_status_sync(player_id: int, status: str) -> bool:
+    """Set verification status for a player (VERIFIED, UNVERIFIED, SUSPENDED)."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE players SET verification_status = ?, updated_at = CURRENT_TIMESTAMP WHERE player_id = ?;", (status, player_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def set_player_verification_status(player_id: int, status: str) -> bool:
+    """Asynchronously update player verification status."""
+    return await asyncio.to_thread(_set_player_verification_status_sync, player_id, status)
+
+def _set_team_verification_status_sync(team_id: int, status: str) -> bool:
+    """Set verification status for a team (VERIFIED, PENDING, UNVERIFIED, SUSPENDED)."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE teams SET verification_status = ?, updated_at = CURRENT_TIMESTAMP WHERE team_id = ?;", (status, team_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def set_team_verification_status(team_id: int, status: str) -> bool:
+    """Asynchronously update team verification status."""
+    return await asyncio.to_thread(_set_team_verification_status_sync, team_id, status)
