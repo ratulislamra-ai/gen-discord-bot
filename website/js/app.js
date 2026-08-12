@@ -1077,34 +1077,6 @@ const App = {
             sessionStorage.setItem('gen_admin_api_key', key);
             this.renderAdminView();
         }
-    showToast(message, type = 'info') {
-        let container = document.getElementById('toast-container');
-        if (!container) {
-            container = document.createElement('div');
-            container.id = 'toast-container';
-            container.style.cssText = 'position: fixed; bottom: 2rem; right: 2rem; z-index: 10000; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none;';
-            document.body.appendChild(container);
-        }
-        const toast = document.createElement('div');
-        toast.className = `toast toast-${type} glass-panel`;
-        const bgColor = type === 'success' ? 'rgba(0, 240, 255, 0.18)' : (type === 'error' ? 'rgba(255, 0, 85, 0.22)' : 'rgba(255, 255, 255, 0.12)');
-        const borderColor = type === 'success' ? 'var(--accent-cyan)' : (type === 'error' ? 'var(--accent-red)' : 'var(--border-card)');
-        const textColor = type === 'error' ? '#ff4d6d' : (type === 'success' ? '#00f0ff' : '#fff');
-        toast.style.cssText = `padding: 0.9rem 1.35rem; border-radius: var(--radius-sm); background: ${bgColor}; border: 1px solid ${borderColor}; color: ${textColor}; font-weight: 700; font-size: 0.92rem; box-shadow: 0 8px 30px rgba(0,0,0,0.6); backdrop-filter: blur(12px); transition: all 0.3s ease; pointer-events: auto;`;
-        toast.innerHTML = message;
-        container.appendChild(toast);
-        setTimeout(() => {
-            toast.style.opacity = '0';
-            toast.style.transform = 'translateY(10px)';
-            setTimeout(() => toast.remove(), 300);
-        }, 3500);
-    },
-
-    async refreshAdminData(toastMsg = '') {
-        if (toastMsg) {
-            this.showToast(toastMsg, 'success');
-        }
-        await this.renderAdminView();
     },
 
     logoutAdmin() {
@@ -1133,32 +1105,28 @@ const App = {
                     <div class="stat-box"><div class="stat-val">${stats.completed_matches ?? 0}</div><div class="stat-lbl">Completed Matches</div></div>
                 </div>
 
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: #fff;">📋 Pending Team Registrations (${pendingRegs.length})</h3>
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">📋 Pending Team Registrations (${pendingRegs.length})</h3>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.5rem;">
                     ${pendingRegs.length === 0 ? `
                         <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
                             <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">✅</div>
                             <h4>No Pending Registrations</h4>
-                            <p style="color: var(--text-muted); margin-top: 0.25rem;">All team registration tickets have been reviewed.</p>
+                            <p style="color: var(--text-muted);">All team registration tickets have been reviewed.</p>
                         </div>
                     ` : pendingRegs.map(r => `
-                        <div class="glass-panel" style="padding: 1.5rem;" id="reg-card-${r.ticket_id}">
+                        <div class="glass-panel" style="padding: 1.5rem;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                                <strong style="font-size: 1.15rem; color: var(--accent-cyan);">${this.escapeHtml(r.team_name || 'Team')}</strong>
+                                <strong style="font-size: 1.1rem; color: var(--accent-cyan);">${r.team_name || 'Team'}</strong>
                                 <span class="badge badge-draft">PENDING</span>
                             </div>
-                            <div style="font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.6;">
-                                🏆 <strong>Tournament:</strong> ${this.escapeHtml(r.tournament_name || 'N/A')}<br>
-                                👑 <strong>Captain:</strong> ${this.escapeHtml(r.captain_name || 'N/A')} (<span style="color: var(--accent-gold);">${this.escapeHtml(r.captain_phone || '')}</span>)<br>
-                                🆔 <strong>Registration Code:</strong> <code>${this.escapeHtml(r.registration_code || r.ticket_id)}</code>
+                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
+                                🏆 <strong>Tournament:</strong> ${r.tournament_name || 'N/A'}<br>
+                                👑 <strong>Captain:</strong> ${r.captain_name || 'N/A'} (<span style="color: var(--accent-gold);">${r.captain_phone || ''}</span>)<br>
+                                🆔 <strong>Code:</strong> ${r.registration_code || r.ticket_id}
                             </div>
                             <div style="display: flex; gap: 0.75rem;">
-                                <button onclick="App.approveTeamAdmin(${r.ticket_id})" class="btn btn-primary" style="flex: 1; padding: 0.6rem; font-weight: 700;">
-                                    ✓ Approve
-                                </button>
-                                <button onclick="App.showRejectModal(${r.ticket_id})" class="btn btn-danger" style="flex: 1; padding: 0.6rem; background: var(--accent-red); color: #fff; font-weight: 700;">
-                                    ✕ Reject
-                                </button>
+                                <button onclick="App.approveTeamAdmin(${r.ticket_id})" class="btn btn-primary" style="flex: 1; padding: 0.5rem;">✅ Approve</button>
+                                <button onclick="App.rejectTeamAdmin(${r.ticket_id})" class="btn btn-danger" style="flex: 1; padding: 0.5rem; background: var(--accent-red); color: #fff;">❌ Reject</button>
                             </div>
                         </div>
                     `).join('')}
@@ -1171,8 +1139,8 @@ const App = {
                     <form onsubmit="App.handleCreateTournament(event)">
                         <div class="form-grid">
                             <div class="form-group"><label>Tournament Name</label><input type="text" id="t-title" class="form-input" placeholder="e.g. GEN Valorant Masters" required></div>
-                            <div class="form-group"><label>Game</label><input type="text" id="t-game" class="form-input" placeholder="VALORANT / PUBG MOBILE / CS2" required></div>
-                            <div class="form-group"><label>Prize Pool</label><input type="text" id="t-prize" class="form-input" placeholder="৳500 BDT / $500 USD"></div>
+                            <div class="form-group"><label>Game</label><input type="text" id="t-game" class="form-input" placeholder="VALORANT / PUBG MOBILE / CS2 / League of Legends" required></div>
+                            <div class="form-group"><label>Prize Pool</label><input type="text" id="t-prize" class="form-input" placeholder="$500 USD / 50,000 BDT"></div>
                             <div class="form-group"><label>Maximum Teams</label><input type="number" id="t-max" class="form-input" value="16" min="2" max="128" required></div>
                             <div class="form-group"><label>Format</label><select id="t-format" class="form-select"><option value="Single Elimination">Single Elimination</option><option value="Double Elimination">Double Elimination</option><option value="Round Robin">Round Robin</option></select></div>
                             <div class="form-group"><label>Initial Status</label><select id="t-status" class="form-select"><option value="REGISTRATION_OPEN">🟢 REGISTRATION OPEN</option><option value="DRAFT">⏸️ DRAFT</option><option value="REGISTRATION_CLOSED">🔴 REGISTRATION CLOSED</option><option value="ONGOING">🔵 ONGOING</option><option value="COMPLETED">🏆 COMPLETED</option></select></div>
@@ -1187,11 +1155,11 @@ const App = {
                     </form>
                 </div>
 
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: #fff;">🏆 Active Database Tournaments</h3>
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">🏆 Active Database Tournaments</h3>
                 <div class="data-table-wrapper glass-panel">
                     <table class="data-table">
                         <thead>
-                            <tr><th>ID</th><th>Name</th><th>Game</th><th>Reg Status</th><th>Main Status</th><th>Approved Teams</th><th>Quick Actions</th></tr>
+                            <tr><th>ID</th><th>Name</th><th>Game</th><th>Reg Status</th><th>Main Status</th><th>Teams</th><th>Quick Actions</th></tr>
                         </thead>
                         <tbody>
                             ${tournaments.map(t => {
@@ -1201,14 +1169,14 @@ const App = {
                                 return `
                                     <tr>
                                         <td>#${t.tournament_id}</td>
-                                        <td><strong>${this.escapeHtml(t.title)}</strong></td>
-                                        <td><span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(t.game_type)}</span></td>
+                                        <td><strong>${t.title}</strong></td>
+                                        <td><span style="color: var(--accent-cyan); font-weight: 700;">${t.game_type}</span></td>
                                         <td><span class="badge ${isFull ? 'badge-closed' : (t.registration_status === 'OPEN' ? 'badge-open' : 'badge-closed')}">${isFull ? 'FULL' : t.registration_status}</span></td>
                                         <td><span class="badge badge-ongoing">${t.status}</span></td>
-                                        <td><strong style="color: ${approved >= 2 ? 'var(--accent-green)' : 'var(--text-primary)'};">${approved} / ${maxT} Teams</strong></td>
-                                        <td style="display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;">
-                                            <button onclick="App.handleOpenRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.3rem 0.5rem; font-size: 0.75rem;" title="Open Registration">🟢 Open</button>
-                                            <button onclick="App.handleCloseRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.3rem 0.5rem; font-size: 0.75rem;" title="Close Registration">🔴 Close</button>
+                                        <td><strong>${approved} / ${maxT}</strong></td>
+                                        <td style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                                            <button onclick="App.handleOpenRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Open Registration">🟢 Open</button>
+                                            <button onclick="App.handleCloseRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Close Registration">🔴 Close</button>
                                             <select onchange="App.handleSetStatus(${t.tournament_id}, this.value)" class="form-select" style="padding: 0.25rem; font-size: 0.75rem; width: auto;">
                                                 <option value="" disabled selected>Status...</option>
                                                 <option value="DRAFT">DRAFT</option>
@@ -1218,8 +1186,8 @@ const App = {
                                                 <option value="COMPLETED">COMPLETED</option>
                                                 <option value="CANCELLED">CANCELLED</option>
                                             </select>
-                                            <button onclick="App.handleGenerateBracket('${t.tournament_id}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" title="Generate or Regenerate Bracket">🏆 Bracket</button>
-                                            <button onclick="App.showCancelModal(${t.tournament_id})" class="btn btn-danger" style="padding: 0.3rem 0.5rem; font-size: 0.75rem; background: var(--accent-red); color:#fff;" title="Cancel Tournament">❌ Cancel</button>
+                                            <button onclick="App.handleGenerateBracket('${t.tournament_id}')" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">🌳 Bracket</button>
+                                            <button onclick="App.handleCancelTournament(${t.tournament_id})" class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-red); color:#fff;">❌ Cancel</button>
                                         </td>
                                     </tr>
                                 `;
@@ -1232,45 +1200,25 @@ const App = {
             const matches = await Api.getMatches();
 
             container.innerHTML = `
-                <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-                    <div>
-                        <h3 style="font-family: var(--font-heading); font-size: 1.6rem; color: #fff;">⚔️ Admin Match Manager</h3>
-                        <p style="color: var(--text-secondary); font-size: 0.9rem;">Schedule matches, manage lobbies, enter match scores & advance winners automatically.</p>
-                    </div>
-                </div>
-
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">⚔️ Update Match Scores</h3>
                 <div class="data-table-wrapper glass-panel">
                     <table class="data-table">
                         <thead>
-                            <tr><th>Match ID</th><th>Tournament</th><th>Stage</th><th>Teams & Scores</th><th>Schedule & Lobby</th><th>Status</th><th>Actions</th></tr>
+                            <tr><th>Match ID</th><th>Tournament</th><th>Stage</th><th>Team 1</th><th>Team 2</th><th>Score</th><th>Action</th></tr>
                         </thead>
                         <tbody>
                             ${matches.length === 0 ? `
-                                <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 3rem;">No matches scheduled yet. Go to Tournament Manager and click 🏆 Bracket to generate matches.</td></tr>
+                                <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">No matches scheduled. Generate a bracket first.</td></tr>
                             ` : matches.map(m => `
                                 <tr>
-                                    <td><strong>#M-${m.match_id}</strong></td>
-                                    <td>${this.escapeHtml(m.tournament_name || 'N/A')}</td>
-                                    <td><span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(m.stage_name || 'Round')}</span></td>
+                                    <td>#${m.match_id}</td>
+                                    <td>${m.tournament_name || 'N/A'}</td>
+                                    <td>${m.stage_name}</td>
+                                    <td>🛡️ ${m.team1_name || 'TBD'}</td>
+                                    <td>🛡️ ${m.team2_name || 'TBD'}</td>
+                                    <td><strong>${m.team1_score ?? 0} - ${m.team2_score ?? 0}</strong></td>
                                     <td>
-                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
-                                            <span>🛡️ <strong>${this.escapeHtml(m.team1_name || 'TBD')}</strong> (${m.team1_score ?? 0})</span>
-                                            <span style="color: var(--text-muted);">vs</span>
-                                            <span>🛡️ <strong>${this.escapeHtml(m.team2_name || 'TBD')}</strong> (${m.team2_score ?? 0})</span>
-                                        </div>
-                                    </td>
-                                    <td style="font-size: 0.8rem; color: var(--text-secondary);">
-                                        📅 ${m.scheduled_time || 'Not Scheduled'}<br>
-                                        🎮 ${this.escapeHtml(m.lobby_info || 'Lobby TBD')}
-                                    </td>
-                                    <td>
-                                        <span class="badge ${m.status === 'COMPLETED' ? 'badge-draft' : 'badge-open'}">${m.status || 'SCHEDULED'}</span>
-                                    </td>
-                                    <td>
-                                        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
-                                            <button onclick="App.showScheduleModal(${m.match_id}, '${this.escapeHtml(m.scheduled_time || '')}', '${this.escapeHtml(m.lobby_info || '')}')" class="btn btn-secondary" style="padding: 0.3rem 0.55rem; font-size: 0.75rem;">📅 Schedule</button>
-                                            <button onclick="App.showScoreInputModal(${m.match_id}, '${this.escapeHtml(m.team1_name || 'Team 1')}', '${this.escapeHtml(m.team2_name || 'Team 2')}', ${m.team1_score ?? 0}, ${m.team2_score ?? 0})" class="btn btn-primary" style="padding: 0.3rem 0.55rem; font-size: 0.75rem;">✏️ Enter Score</button>
-                                        </div>
+                                        <button onclick="App.showScoreInputModal(${m.match_id}, '${m.team1_name || 'Team 1'}', '${m.team2_name || 'Team 2'}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">✏️ Update Score</button>
                                     </td>
                                 </tr>
                             `).join('')}
@@ -1282,7 +1230,7 @@ const App = {
             const logs = await Api.getAuditLogs(this.adminApiKey);
 
             container.innerHTML = `
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: #fff;">📜 Admin Action Audit Logs (${logs.length})</h3>
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">📜 Admin Action Audit Logs (${logs.length})</h3>
                 <div class="data-table-wrapper glass-panel">
                     <table class="data-table">
                         <thead>
@@ -1295,10 +1243,10 @@ const App = {
                                 <tr>
                                     <td>#${l.log_id}</td>
                                     <td style="font-size: 0.8rem; color: var(--text-muted);">${l.timestamp}</td>
-                                    <td><strong style="color: var(--accent-gold);">${this.escapeHtml(l.admin_id)}</strong></td>
-                                    <td><span class="badge badge-ongoing">${this.escapeHtml(l.action)}</span></td>
-                                    <td>${this.escapeHtml(l.tournament_name || (l.tournament_id ? `#${l.tournament_id}` : '-'))}</td>
-                                    <td style="font-size: 0.85rem; color: var(--text-secondary);">${this.escapeHtml(l.details || '-')}</td>
+                                    <td><strong style="color: var(--accent-gold);">${l.admin_id}</strong></td>
+                                    <td><span class="badge badge-ongoing">${l.action}</span></td>
+                                    <td>${l.tournament_name || (l.tournament_id ? `#${l.tournament_id}` : '-')}</td>
+                                    <td style="font-size: 0.85rem; color: var(--text-secondary);">${l.details || '-'}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1311,39 +1259,22 @@ const App = {
     async approveTeamAdmin(ticketId) {
         try {
             await Api.approveRegistration(this.adminApiKey, ticketId);
-            this.showToast('✓ Team approved successfully', 'success');
-            await this.refreshAdminData();
+            alert('Registration approved successfully!');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Failed to approve team: ' + err.message, 'error');
+            alert('Error approving registration: ' + err.message);
         }
     },
 
-    showRejectModal(ticketId) {
-        this.showModal(`
-            <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: var(--accent-red);">❌ Reject Team Registration</h3>
-            <form onsubmit="App.handleRejectSubmit(event, ${ticketId})">
-                <div class="form-group" style="margin-bottom: 1.5rem;">
-                    <label>Rejection Reason</label>
-                    <textarea id="reject-reason" class="form-textarea" rows="3" placeholder="Provide reason for team captain..." required></textarea>
-                </div>
-                <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                    <button type="button" onclick="App.hideModal()" class="btn btn-secondary">Cancel</button>
-                    <button type="submit" class="btn btn-danger" style="background: var(--accent-red); color: #fff;">Confirm Rejection</button>
-                </div>
-            </form>
-        `);
-    },
-
-    async handleRejectSubmit(e, ticketId) {
-        e.preventDefault();
-        const reason = document.getElementById('reject-reason').value.trim();
+    async rejectTeamAdmin(ticketId) {
+        const reason = prompt('Enter rejection reason:');
+        if (!reason) return;
         try {
             await Api.rejectRegistration(this.adminApiKey, ticketId, reason);
-            this.hideModal();
-            this.showToast('✓ Registration rejected', 'info');
-            await this.refreshAdminData();
+            alert('Registration rejected successfully!');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error rejecting registration: ' + err.message, 'error');
+            alert('Error rejecting registration: ' + err.message);
         }
     },
 
@@ -1370,30 +1301,30 @@ const App = {
                 registration_status, registration_start, registration_deadline,
                 tournament_start, tournament_end, description, rules_text
             });
-            this.showToast('✨ Tournament created successfully!', 'success');
-            await this.refreshAdminData();
+            alert('Tournament created! If status is OPEN, it is now live in Discord registration.');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Failed to create tournament: ' + err.message, 'error');
+            alert('Failed to create tournament: ' + err.message);
         }
     },
 
     async handleOpenRegistration(id) {
         try {
             await Api.openRegistration(this.adminApiKey, id);
-            this.showToast('🟢 Registration opened!', 'success');
-            await this.refreshAdminData();
+            alert('Registration opened! Tournament is now active in Discord dropdown.');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error opening registration: ' + err.message, 'error');
+            alert('Error opening registration: ' + err.message);
         }
     },
 
     async handleCloseRegistration(id) {
         try {
             await Api.closeRegistration(this.adminApiKey, id);
-            this.showToast('🔴 Registration closed.', 'info');
-            await this.refreshAdminData();
+            alert('Registration closed.');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error closing registration: ' + err.message, 'error');
+            alert('Error closing registration: ' + err.message);
         }
     },
 
@@ -1401,119 +1332,50 @@ const App = {
         if (!newStatus) return;
         try {
             await Api.setTournamentStatus(this.adminApiKey, id, newStatus);
-            this.showToast(`Tournament status updated to ${newStatus}`, 'success');
-            await this.refreshAdminData();
+            alert(`Tournament status updated to ${newStatus}.`);
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error changing status: ' + err.message, 'error');
+            alert('Error changing status: ' + err.message);
         }
     },
 
-    showCancelModal(id) {
-        this.showModal(`
-            <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: var(--accent-red);">❌ Cancel Tournament</h3>
-            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Are you sure you want to cancel this tournament? Status will update to CANCELLED.</p>
-            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
-                <button type="button" onclick="App.hideModal()" class="btn btn-secondary">Keep Active</button>
-                <button type="button" onclick="App.executeCancelTournament(${id})" class="btn btn-danger" style="background: var(--accent-red); color: #fff;">Yes, Cancel Tournament</button>
-            </div>
-        `);
-    },
-
-    async executeCancelTournament(id) {
+    async handleCancelTournament(id) {
+        if (!confirm('Are you sure you want to cancel this tournament?')) return;
         try {
             await Api.cancelTournament(this.adminApiKey, id);
-            this.hideModal();
-            this.showToast('Tournament cancelled.', 'info');
-            await this.refreshAdminData();
+            alert('Tournament cancelled.');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error cancelling tournament: ' + err.message, 'error');
+            alert('Error cancelling tournament: ' + err.message);
         }
     },
 
     async handleGenerateBracket(id) {
         try {
             await Api.generateBracket(this.adminApiKey, id);
-            this.showToast('🏆 Tournament bracket generated successfully!', 'success');
-            this.adminTab = 'matches';
-            await this.refreshAdminData();
+            alert('Tournament bracket generated successfully!');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error generating bracket: ' + err.message, 'error');
+            alert('Error generating bracket: ' + err.message);
         }
     },
 
-    showScheduleModal(matchId, currentScheduled = '', currentLobby = '') {
+    showScoreInputModal(matchId, t1Name, t2Name) {
         this.showModal(`
-            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem;">📅 Schedule Match & Lobby Info</h3>
-            <form onsubmit="App.handleSaveSchedule(event, ${matchId})">
-                <div class="form-grid" style="margin-bottom: 1rem;">
+            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem;">✏️ Enter Match Score</h3>
+            <form onsubmit="App.handleSaveMatchScore(event, ${matchId})">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
                     <div class="form-group">
-                        <label>Scheduled Time (Asia/Dhaka)</label>
-                        <input type="text" id="m-schedule-time" class="form-input" placeholder="e.g. 15 Aug 2026, 8:00 PM (Asia/Dhaka)" value="${currentScheduled}">
+                        <label>${t1Name} Score</label>
+                        <input type="number" id="m-score1" class="form-input" value="0" min="0" required>
                     </div>
                     <div class="form-group">
-                        <label>Map / Mode</label>
-                        <input type="text" id="m-map" class="form-input" placeholder="e.g. Haven / Ascent / Erangel">
-                    </div>
-                    <div class="form-group">
-                        <label>Lobby Name / ID</label>
-                        <input type="text" id="m-lobby-name" class="form-input" placeholder="e.g. GEN-MATCH-${matchId}" value="${currentLobby}">
-                    </div>
-                    <div class="form-group">
-                        <label>Lobby Password / Passcode</label>
-                        <input type="text" id="m-lobby-pass" class="form-input" placeholder="e.g. 1234">
+                        <label>${t2Name} Score</label>
+                        <input type="number" id="m-score2" class="form-input" value="0" min="0" required>
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem;">💾 Save Schedule & Lobby Info</button>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">💾 Save Match Result</button>
             </form>
-        `);
-    },
-
-    async handleSaveSchedule(e, matchId) {
-        e.preventDefault();
-        const scheduled_at = document.getElementById('m-schedule-time').value;
-        const map_name = document.getElementById('m-map').value;
-        const lobby_name = document.getElementById('m-lobby-name').value;
-        const lobby_password = document.getElementById('m-lobby-pass').value;
-
-        try {
-            await Api.scheduleMatch(this.adminApiKey, matchId, {
-                scheduled_at,
-                map: map_name,
-                lobby_name,
-                lobby_password
-            });
-            this.hideModal();
-            this.showToast('📅 Match schedule & lobby details updated!', 'success');
-            await this.refreshAdminData();
-        } catch (err) {
-            this.showToast('✕ Failed to schedule match: ' + err.message, 'error');
-        }
-    },
-
-    showScoreInputModal(matchId, t1Name, t2Name, currentScore1 = 0, currentScore2 = 0) {
-        this.showModal(`
-            <div style="max-width: 500px; margin: 0 auto;">
-                <h3 style="font-family: var(--font-heading); font-size: 1.6rem; margin-bottom: 0.5rem; text-align: center; color: #fff;">⚔️ ENTER MATCH RESULT</h3>
-                <p style="color: var(--text-secondary); font-size: 0.9rem; text-align: center; margin-bottom: 1.5rem;">
-                    Match #${matchId} • Submit scores to determine winner & auto-advance bracket.
-                </p>
-                <form onsubmit="App.handleSaveMatchScore(event, ${matchId})">
-                    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--border-card); padding: 1.5rem; border-radius: var(--radius-md); margin-bottom: 1.5rem;">
-                        <div style="text-align: center;">
-                            <div style="font-weight: 800; font-size: 1.1rem; color: var(--accent-cyan); margin-bottom: 0.5rem;">${this.escapeHtml(t1Name)}</div>
-                            <input type="number" id="m-score1" class="form-input" value="${currentScore1}" min="0" style="text-align: center; font-weight: 800; font-size: 1.4rem;" required>
-                        </div>
-                        <div style="font-size: 1.5rem; font-weight: 800; color: var(--text-muted);">VS</div>
-                        <div style="text-align: center;">
-                            <div style="font-weight: 800; font-size: 1.1rem; color: var(--accent-gold); margin-bottom: 0.5rem;">${this.escapeHtml(t2Name)}</div>
-                            <input type="number" id="m-score2" class="form-input" value="${currentScore2}" min="0" style="text-align: center; font-weight: 800; font-size: 1.4rem;" required>
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-size: 1rem; font-weight: 700;">
-                        🏆 SUBMIT RESULT & ADVANCE WINNER
-                    </button>
-                </form>
-            </div>
         `);
     },
 
@@ -1529,10 +1391,10 @@ const App = {
                 status: 'COMPLETED'
             });
             this.hideModal();
-            this.showToast('🏆 Match score recorded & winner advanced in bracket!', 'success');
-            await this.refreshAdminData();
+            alert('Match score recorded and winner advanced!');
+            await this.renderAdminView();
         } catch (err) {
-            this.showToast('✕ Error recording match score: ' + err.message, 'error');
+            alert('Error recording score: ' + err.message);
         }
     }
 };
