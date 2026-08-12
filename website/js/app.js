@@ -7,6 +7,9 @@ document.addEventListener('DOMContentLoaded', () => {
     App.init();
 });
 
+const TEAM_PLACEHOLDER_LOGO = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect width="64" height="64" rx="12" fill="%231a2035"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" fill="%2300f0ff" font-family="sans-serif" font-size="28">🛡️</text></svg>`;
+const PLAYER_PLACEHOLDER_AVATAR = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><circle cx="32" cy="32" r="32" fill="%231a2035"/><text x="50%" y="55%" dominant-baseline="middle" text-anchor="middle" fill="%23ff0055" font-family="sans-serif" font-size="28">👤</text></svg>`;
+
 const App = {
     currentView: 'home',
     discordInviteUrl: '',
@@ -18,8 +21,16 @@ const App = {
 
     async init() {
         this.bindEvents();
-        await this.loadConfig();
-        this.renderView('home');
+        try {
+            await this.loadConfig();
+        } catch (e) {
+            console.warn('Config load notice:', e);
+        }
+        try {
+            await this.renderView('home');
+        } catch (e) {
+            console.error('Failed initial view render:', e);
+        }
         this.startAutoRefresh();
     },
 
@@ -40,7 +51,7 @@ const App = {
             if (this.currentView === 'home') {
                 const stats = await Api.getStats();
                 const statVals = document.querySelectorAll('.stats-banner .stat-val');
-                if (statVals.length >= 4) {
+                if (statVals.length >= 4 && stats) {
                     statVals[0].textContent = stats.total_tournaments ?? 0;
                     statVals[1].textContent = stats.approved_registrations ?? 0;
                     statVals[2].textContent = stats.completed_matches ?? 0;
@@ -61,8 +72,13 @@ const App = {
     },
 
     async loadConfig() {
-        const config = await Api.getConfig();
-        this.discordInviteUrl = config.discord_invite_url || '';
+        try {
+            const config = await Api.getConfig();
+            this.discordInviteUrl = (config && config.discord_invite_url) || '';
+        } catch (e) {
+            console.warn('Failed to fetch config:', e);
+            this.discordInviteUrl = '';
+        }
     },
 
     openDiscordInvite() {
@@ -141,36 +157,50 @@ const App = {
             }
         });
 
-        switch (viewName) {
-            case 'home':
-                await this.renderHomeView();
-                break;
-            case 'tournaments':
-                await this.renderTournamentsView();
-                break;
-            case 'teams':
-                await this.renderTeamsView();
-                break;
-            case 'players':
-                await this.renderPlayersView();
-                break;
-            case 'matches':
-                await this.renderMatchesView();
-                break;
-            case 'brackets':
-                await this.renderBracketsView();
-                break;
-            case 'leaderboards':
-                await this.renderLeaderboardsView();
-                break;
-            case 'dashboard':
-                await this.renderDashboardView();
-                break;
-            case 'admin':
-                await this.renderAdminView();
-                break;
-            default:
-                await this.renderHomeView();
+        try {
+            switch (viewName) {
+                case 'home':
+                    await this.renderHomeView();
+                    break;
+                case 'tournaments':
+                    await this.renderTournamentsView();
+                    break;
+                case 'teams':
+                    await this.renderTeamsView();
+                    break;
+                case 'players':
+                    await this.renderPlayersView();
+                    break;
+                case 'matches':
+                    await this.renderMatchesView();
+                    break;
+                case 'brackets':
+                    await this.renderBracketsView();
+                    break;
+                case 'leaderboards':
+                    await this.renderLeaderboardsView();
+                    break;
+                case 'dashboard':
+                    await this.renderDashboardView();
+                    break;
+                case 'admin':
+                    await this.renderAdminView();
+                    break;
+                default:
+                    await this.renderHomeView();
+            }
+        } catch (err) {
+            console.error(`Error rendering view '${viewName}':`, err);
+            container.innerHTML = `
+                <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; max-width: 600px; margin: 3rem auto;">
+                    <div style="font-size: 3.5rem; margin-bottom: 1rem;">⚠️</div>
+                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem; color: var(--accent-gold);">UNABLE TO LOAD SECTION</h2>
+                    <p style="color: var(--text-secondary); margin: 0.75rem 0 1.5rem;">
+                        Failed to render the '${viewName}' section. Please try again or refresh.
+                    </p>
+                    <button onclick="App.renderView('${viewName}')" class="btn btn-discord">🔄 Retry</button>
+                </div>
+            `;
         }
 
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -346,7 +376,7 @@ const App = {
             <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; max-height: 250px; overflow-y: auto;">
                 ${approvedTeams.map(tm => `
                     <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
-                        <img src="${tm.team_logo_url || 'https://via.placeholder.com/40'}" style="width: 36px; height: 36px; border-radius: 6px; object-fit: cover;" onerror="this.src='https://via.placeholder.com/40?text=TEAM'">
+                        <img src="${tm.team_logo_url || TEAM_PLACEHOLDER_LOGO}" style="width: 36px; height: 36px; border-radius: 6px; object-fit: cover;" onerror="this.src=TEAM_PLACEHOLDER_LOGO">
                         <div>
                             <div style="font-weight: 700; font-size: 0.9rem;">${tm.team_name}</div>
                             <div style="font-size: 0.75rem; color: var(--text-muted);">👑 ${tm.captain_name}</div>
@@ -417,11 +447,11 @@ const App = {
                     </div>
                 ` : teams.map(tm => {
                     const isVerified = tm.verification_status === 'VERIFIED';
-                    const logoSrc = tm.logo_url ? (tm.logo_url.startsWith('http') ? tm.logo_url : `/${tm.logo_url}`) : 'https://via.placeholder.com/64?text=TEAM';
+                    const logoSrc = tm.logo_url ? (tm.logo_url.startsWith('http') ? tm.logo_url : `/${tm.logo_url}`) : TEAM_PLACEHOLDER_LOGO;
                     return `
                         <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${tm.slug}')">
                             <div class="team-card-header">
-                                <img src="${logoSrc}" alt="${tm.name}" class="team-logo-lg" onerror="this.src='https://via.placeholder.com/64?text=TEAM'">
+                                <img src="${logoSrc}" alt="${tm.name}" class="team-logo-lg" onerror="this.src=TEAM_PLACEHOLDER_LOGO">
                                 <div>
                                     <div class="team-info-name">${tm.name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</div>
                                     <div class="team-info-captain">🏷️ ID: ${tm.public_id}</div>
@@ -445,11 +475,11 @@ const App = {
         if (!team) return;
 
         const isVerified = team.verification_status === 'VERIFIED';
-        const logoSrc = team.logo_url ? (team.logo_url.startsWith('http') ? team.logo_url : `/${team.logo_url}`) : 'https://via.placeholder.com/80?text=TEAM';
+        const logoSrc = team.logo_url ? (team.logo_url.startsWith('http') ? team.logo_url : `/${team.logo_url}`) : TEAM_PLACEHOLDER_LOGO;
 
         this.showModal(`
             <div style="text-align: center; margin-bottom: 1.5rem;">
-                <img src="${logoSrc}" style="width: 80px; height: 80px; border-radius: 12px; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/80?text=TEAM'">
+                <img src="${logoSrc}" style="width: 80px; height: 80px; border-radius: 12px; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src=TEAM_PLACEHOLDER_LOGO">
                 <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${team.name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h2>
                 <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏷️ Public ID: ${team.public_id}</div>
                 <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">🎮 ${team.game || 'VALORANT'} • 🌍 ${team.region || 'South Asia'}</div>
@@ -502,10 +532,10 @@ const App = {
                     </div>
                 ` : players.map(p => {
                     const isVerified = p.verification_status === 'VERIFIED';
-                    const avatarSrc = p.avatar_url || 'https://via.placeholder.com/64?text=GEN';
+                    const avatarSrc = p.avatar_url || PLAYER_PLACEHOLDER_AVATAR;
                     return `
                         <div class="glass-panel" style="padding: 1.25rem; text-align: center; cursor: pointer;" onclick="App.showPlayerProfileModal('${p.public_id}')">
-                            <img src="${avatarSrc}" style="width: 64px; height: 64px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/64?text=GEN'">
+                            <img src="${avatarSrc}" style="width: 64px; height: 64px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src=PLAYER_PLACEHOLDER_AVATAR">
                             <h3 style="font-family: var(--font-heading); font-size: 1.2rem;">${p.display_name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h3>
                             <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; margin-top: 0.2rem;">🏷️ ${p.public_id}</div>
                             <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">🎮 ${p.primary_game || 'VALORANT'}</div>
@@ -521,12 +551,12 @@ const App = {
         if (!player) return;
 
         const isVerified = player.verification_status === 'VERIFIED';
-        const avatarSrc = player.avatar_url || 'https://via.placeholder.com/80?text=GEN';
+        const avatarSrc = player.avatar_url || PLAYER_PLACEHOLDER_AVATAR;
         const stats = player.stats || {};
 
         this.showModal(`
             <div style="text-align: center; margin-bottom: 1.5rem;">
-                <img src="${avatarSrc}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src='https://via.placeholder.com/80?text=GEN'">
+                <img src="${avatarSrc}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src=PLAYER_PLACEHOLDER_AVATAR">
                 <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${player.display_name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h2>
                 <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏷️ Public ID: ${player.public_id}</div>
                 <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">🎮 Primary Game: ${player.primary_game || 'VALORANT'}</div>

@@ -393,6 +393,8 @@ const Api = {
             throw new Error(err.detail || `HTTP error ${res.status}`);
         }
         return await res.json();
+    },
+
     /**
      * Fetch tournament ruleset
      */
