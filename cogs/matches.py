@@ -64,6 +64,52 @@ class MatchControlView(discord.ui.View):
         super().__init__(timeout=None)
         self.match_id = match_id
 
+    @discord.ui.button(label="JOIN MY TEAM", style=discord.ButtonStyle.secondary, emoji="👥", custom_id="match_ctrl_join_team")
+    async def join_team_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        user_regs = await get_user_all_registrations(str(interaction.user.id))
+        if not user_regs:
+            await interaction.followup.send("❌ You are not registered on any active team in this tournament.", ephemeral=True)
+            return
+
+        team_names = [r["team_name"] for r in user_regs]
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.*, t1.name as team1_name, t2.name as team2_name 
+                FROM matches m
+                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                WHERE m.status IN ('SCHEDULED', 'CHECK_IN_OPEN', 'READY', 'IN_PROGRESS')
+                ORDER BY m.match_id DESC LIMIT 10;
+            """)
+            matches = [dict(r) for r in cursor.fetchall()]
+
+        target_m = None
+        assigned_team = ""
+        for m in matches:
+            if m.get("team1_name") in team_names:
+                target_m = m
+                assigned_team = m["team1_name"]
+                break
+            elif m.get("team2_name") in team_names:
+                target_m = m
+                assigned_team = m["team2_name"]
+                break
+
+        if not target_m:
+            await interaction.followup.send("❌ Could not match your team membership to an active match room.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="👥 Team Membership Verified!",
+            description=f"Welcome {interaction.user.mention}! You have been verified as a player for **{assigned_team}** in **Match #{target_m.get('public_match_id') or target_m['match_id']}**.",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Match Status", value=f"`{target_m.get('status')}`", inline=True)
+        embed.add_field(name="Stage", value=f"`{target_m.get('stage_name', 'Tournament Round')}`", inline=True)
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
     @discord.ui.button(label="Check In", style=discord.ButtonStyle.success, emoji="🎟️", custom_id="match_ctrl_checkin")
     async def check_in_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
@@ -244,12 +290,49 @@ class MatchesCog(commands.Cog):
         seeds = await generate_tournament_seeds(tournament_id, method.upper())
         if not seeds:
             await interaction.followup.send("❌ No approved teams or seeds already locked.", ephemeral=True)
+            return
         desc = "\n".join([f"**Seed {s['seed_number']}**: Team ID {s['team_id']}" for s in seeds[:16]])
         embed = discord.Embed(
             title=f"🎲 Tournament #{tournament_id} Seeds Generated ({method.upper()})",
             description=desc,
             color=discord.Color.green()
         )
+        await interaction.followup.send(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="transfer-captaincy", description="[Captain] Transfer team captaincy to another roster member.")
+    @app_commands.describe(team_id="Team ID", new_captain="Mention target Discord user")
+    async def transfer_captaincy_cmd(self, interaction: discord.Interaction, team_id: int, new_captain: discord.User):
+        """Transfer team captaincy to a roster member."""
+        from database.db import get_or_create_player, transfer_team_captaincy
+        await interaction.response.defer(ephemeral=True)
+        try:
+            target_p = await get_or_create_player(str(new_captain.id), new_captain.name, new_captain.display_name)
+            ok = await transfer_team_captaincy(team_id, target_p["player_id"])
+            if ok:
+                await interaction.followup.send(f"👑 Captaincy transferred to **{new_captain.display_name}** successfully!", ephemeral=True)
+            else:
+                await interaction.followup.send("❌ Transfer failed.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error: {str(e)}", ephemeral=True)
+
+    @app_commands.command(name="inspect-team-history", description="[Staff] Inspect complete team history and past roster snapshots.")
+    @app_commands.describe(team_id_or_slug="Team ID or Team Name/Slug")
+    async def inspect_team_history_cmd(self, interaction: discord.Interaction, team_id_or_slug: str):
+        """Staff command to view team history."""
+        from database.db import get_team_history
+        await interaction.response.defer(ephemeral=True)
+        h = await get_team_history(team_id_or_slug)
+        if not h:
+            await interaction.followup.send("❌ Team history not found.", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title=f"📜 Team History • {h.get('name')}",
+            description=f"**Public ID:** `{h.get('public_id')}`\n**Region:** `{h.get('region')}`\n**Roster Lock:** `{'LOCKED' if h.get('roster_locked') else 'UNLOCKED'}`",
+            color=discord.Color.blue()
+        )
+        roster_str = "\n".join([f"• {p.get('display_name')} (`{p.get('role')}`) - Joined: {str(p.get('joined_at'))[:10]}" for p in h.get("roster_history", [])[:10]])
+        embed.add_field(name="Roster Members", value=roster_str or "No history", inline=False)
         await interaction.followup.send(embed=embed, ephemeral=True)
 
     @app_commands.command(name="create-match-room", description="[Admin/Staff] Provision private match room channel for a match.")

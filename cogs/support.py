@@ -420,6 +420,38 @@ class SupportTicketControlView(discord.ui.View):
 
         await interaction.response.send_message("Select close resolution category:", view=CloseChoiceView(ticket["case_id"]), ephemeral=True)
 
+class DisputeResolutionView(discord.ui.View):
+    """Staff control view for match disputes."""
+    def __init__(self, case_id: str, match_id: int):
+        super().__init__(timeout=None)
+        self.case_id = case_id
+        self.match_id = match_id
+
+    @discord.ui.button(label="Claim Case", style=discord.ButtonStyle.primary, emoji="👤", custom_id="dispute_ctrl_claim")
+    async def claim_dispute(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        ticket = await claim_support_ticket(self.case_id, str(interaction.user.id))
+        if ticket:
+            await interaction.followup.send(f"✅ Dispute Case `{self.case_id}` claimed by **{interaction.user.display_name}**.", ephemeral=False)
+        else:
+            await interaction.followup.send("❌ Could not claim dispute.", ephemeral=True)
+
+    @discord.ui.button(label="Request Evidence", style=discord.ButtonStyle.secondary, emoji="📎", custom_id="dispute_ctrl_evidence")
+    async def request_evidence(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("📸 **Staff Notice**: Please upload screenshot/video evidence (match end screen, lobby chat, or proof) in this channel.", ephemeral=False)
+
+    @discord.ui.button(label="Approve Result", style=discord.ButtonStyle.success, emoji="✅", custom_id="dispute_ctrl_approve")
+    async def approve_result(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await close_support_ticket(self.case_id, str(interaction.user.id), "RESOLVED", "Match result approved by staff")
+        await interaction.followup.send(f"✅ **Match #{self.match_id} Result Approved**! Dispute `{self.case_id}` marked as RESOLVED.", ephemeral=False)
+
+    @discord.ui.button(label="Overturn Result", style=discord.ButtonStyle.danger, emoji="🔄", custom_id="dispute_ctrl_overturn")
+    async def overturn_result(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        await close_support_ticket(self.case_id, str(interaction.user.id), "RESOLVED", "Match result overturned by staff")
+        await interaction.followup.send(f"🔄 **Match #{self.match_id} Result Overturned** by staff. Please re-submit scores.", ephemeral=False)
+
 # ==============================================================================
 # PERSISTENT CATEGORY SELECT VIEW
 # ==============================================================================

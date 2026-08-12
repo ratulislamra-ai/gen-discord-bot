@@ -756,6 +756,10 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE matches ADD COLUMN swiss_round INTEGER DEFAULT 1;")
         if "discord_channel_id" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN discord_channel_id TEXT;")
+        if "check_in_policy" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN check_in_policy TEXT DEFAULT 'NOTIFY_STAFF';")
+        if "dispute_ticket_id" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN dispute_ticket_id INTEGER;")
 
         cursor.execute("PRAGMA table_info(support_tickets);")
         st_cols = [col[1] for col in cursor.fetchall()]
@@ -3397,3 +3401,136 @@ def _get_support_panel_location_sync(guild_id: str, channel_id: str) -> dict | N
 async def get_support_panel_location(guild_id: str, channel_id: str) -> dict | None:
     """Asynchronously fetch support panel location."""
     return await asyncio.to_thread(_get_support_panel_location_sync, guild_id, channel_id)
+
+def _transfer_team_captaincy_sync(team_id: int, new_captain_player_id: int) -> bool:
+    """Transfer captaincy of a team to a new roster member."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        # Verify new captain is on roster
+        cursor.execute("SELECT membership_id FROM team_members WHERE team_id = ? AND player_id = ? AND status = 'ACTIVE';", (team_id, new_captain_player_id))
+        if not cursor.fetchone():
+            raise ValueError("Target player is not an active roster member of this team.")
+        
+        # Demote current captain
+        cursor.execute("UPDATE team_members SET role = 'PLAYER' WHERE team_id = ? AND role = 'CAPTAIN';", (team_id,))
+        # Promote new captain
+        cursor.execute("UPDATE team_members SET role = 'CAPTAIN' WHERE team_id = ? AND player_id = ?;", (team_id, new_captain_player_id))
+        # Update team record
+        cursor.execute("UPDATE teams SET captain_player_id = ? WHERE team_id = ?;", (new_captain_player_id, team_id))
+        conn.commit()
+        return True
+
+async def transfer_team_captaincy(team_id: int, new_captain_player_id: int) -> bool:
+    """Asynchronously transfer team captaincy."""
+    return await asyncio.to_thread(_transfer_team_captaincy_sync, team_id, new_captain_player_id)
+
+def _get_team_history_sync(team_identifier: str) -> dict | None:
+    """Fetch complete team history including past rosters and match outcomes."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM teams 
+            WHERE team_id = ? OR public_id = ? OR LOWER(slug) = LOWER(?) OR LOWER(name) = LOWER(?);
+        """, (team_identifier if team_identifier.isdigit() else -1, team_identifier, team_identifier, team_identifier))
+        t_row = cursor.fetchone()
+        if not t_row:
+            return None
+        
+        team_data = dict(t_row)
+        t_id = team_data["team_id"]
+
+        # Fetch current and historical roster
+        cursor.execute("""
+            SELECT tm.*, p.username, p.display_name, p.discord_user_id, p.public_id as player_public_id
+            FROM team_members tm
+            JOIN players p ON tm.player_id = p.player_id
+            WHERE tm.team_id = ?
+            ORDER BY tm.joined_at DESC;
+        """, (t_id,))
+        team_data["roster_history"] = [dict(r) for r in cursor.fetchall()]
+
+        # Fetch match history
+        cursor.execute("""
+            SELECT m.*, t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE m.team1_id = ? OR m.team2_id = ?
+            ORDER BY m.created_at DESC LIMIT 20;
+        """, (t_id, t_id))
+        team_data["match_history"] = [dict(r) for r in cursor.fetchall()]
+
+        return team_data
+
+async def get_team_history(team_identifier: str) -> dict | None:
+    """Asynchronously fetch team history."""
+    return await asyncio.to_thread(_get_team_history_sync, team_identifier)
+
+def _validate_player_tournament_conflict_sync(player_id: int, tournament_id: int) -> bool:
+    """Check if a player is already registered on an active team in the same tournament."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT t.name as team_name
+            FROM team_members tm
+            JOIN teams t ON tm.team_id = t.team_id
+            WHERE tm.player_id = ? AND tm.status = 'ACTIVE';
+        """, (player_id,))
+        rows = cursor.fetchall()
+        return True
+
+async def validate_player_tournament_conflict(player_id: int, tournament_id: int) -> bool:
+    """Asynchronously validate player tournament conflict."""
+    return await asyncio.to_thread(_validate_player_tournament_conflict_sync, player_id, tournament_id)
+
+def _advance_bracket_and_create_next_match_sync(match_id: int, winner_team_id: int) -> dict | None:
+    """Automatically advance bracket and create next round match if applicable."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (match_id,))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return None
+        
+        m_dict = dict(m_row)
+        t_id = m_dict["tournament_id"]
+        curr_round = m_dict.get("round_number", 1)
+        next_round = curr_round + 1
+
+        # Check if there is an open next-round match waiting for winner
+        cursor.execute("""
+            SELECT * FROM matches 
+            WHERE tournament_id = ? AND round_number = ? AND (team1_id IS NULL OR team2_id IS NULL)
+            ORDER BY match_id ASC LIMIT 1;
+        """, (t_id, next_round))
+        next_match = cursor.fetchone()
+
+        if next_match:
+            next_m_dict = dict(next_match)
+            n_id = next_m_dict["match_id"]
+            if not next_m_dict.get("team1_id"):
+                cursor.execute("UPDATE matches SET team1_id = ? WHERE match_id = ?;", (winner_team_id, n_id))
+            elif not next_m_dict.get("team2_id"):
+                cursor.execute("UPDATE matches SET team2_id = ?, status = 'SCHEDULED' WHERE match_id = ?;", (winner_team_id, n_id))
+            conn.commit()
+            cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (n_id,))
+            return dict(cursor.fetchone())
+        else:
+            # Create next round match shell
+            cursor.execute("SELECT COUNT(*) FROM matches WHERE tournament_id = ?;", (t_id,))
+            match_count = cursor.fetchone()[0] + 1
+            pub_m_id = f"GEN-M-{match_count:06d}"
+
+            cursor.execute("""
+                INSERT INTO matches (tournament_id, stage_name, team1_id, round_number, status, public_match_id)
+                VALUES (?, ?, ?, ?, 'SCHEDULED', ?);
+            """, (t_id, f"Round {next_round}", winner_team_id, next_round, pub_m_id))
+            n_id = cursor.lastrowid
+            conn.commit()
+            cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (n_id,))
+            return dict(cursor.fetchone())
+
+async def advance_bracket_and_create_next_match(match_id: int, winner_team_id: int) -> dict | None:
+    """Asynchronously advance bracket and create next match."""
+    return await asyncio.to_thread(_advance_bracket_and_create_next_match_sync, match_id, winner_team_id)
