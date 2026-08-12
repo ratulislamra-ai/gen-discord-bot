@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 const TEAM_PLACEHOLDER_LOGO = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxMiIgZmlsbD0iIzFhMjAzNSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTUlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjI4Ij7wn4ef77iJPC90ZXh0Pjwvc3ZnPg==';
-const PLAYER_PLACEHOLDER_AVATAR = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48Y2lyY2xlIGN4PSIzMiIgY3k9IjMyIiByPSIzMiIgZmlsbD0iIzFhMjAzNSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTUlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjI4Ij7wn5CwPC90ZXh0Pjwvc3ZnPg==';
+const PLAYER_PLACEHOLDER_AVATAR = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48Y2lyY2xlIGN4PSIzMiIgY3k9IzMyIiByPSIzMiIgZmlsbD0iIzFhMjAzNSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTUlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjI4Ij7wn5CwPC90ZXh0Pjwvc3ZnPg==';
 
 const App = {
     currentView: 'home',
@@ -299,35 +299,42 @@ const App = {
     // RENDER TOURNAMENTS VIEW
     async renderTournamentsView() {
         const container = document.getElementById('app-content');
-        const tournaments = await Api.getTournaments();
+        if (!container) return;
+
+        let tournaments = [];
+        try {
+            tournaments = await Api.getTournaments();
+        } catch (e) {
+            console.warn('Error fetching tournaments:', e);
+        }
 
         container.innerHTML = `
-            <div style="margin-bottom: 3rem;">
-                <div class="hero-badge">🏆 COMPETITIVE TOURNAMENTS</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    ACTIVE & UPCOMING <span class="gradient-text">EVENTS</span>
+            <div style="margin-bottom: 2.5rem;">
+                <div class="hero-badge">🏆 COMPETITIVE EVENTS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                    ACTIVE & UPCOMING <span class="gradient-text">TOURNAMENTS</span>
                 </h1>
-                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
-                    Browse active esports championships. All team registrations are submitted directly via Discord and instantly reflected here upon admin approval.
+                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
+                    Explore active tournaments, team limits, prize pools, and rules. Join via Discord commands.
                 </p>
             </div>
 
             <div class="tournaments-grid">
                 ${tournaments.length === 0 ? `
-                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                    <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; grid-column: 1 / -1;">
                         <div style="font-size: 3rem; margin-bottom: 1rem;">🏆</div>
-                        <h3>No Active Tournaments</h3>
-                        <p style="color: var(--text-secondary);">Check back soon for upcoming GEN Esports events.</p>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Active Tournaments</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Check back soon or join our Discord server for announcement alerts!</p>
                     </div>
                 ` : tournaments.map(t => this.buildTournamentCardHtml(t)).join('')}
             </div>
         `;
     },
 
-    handleImgError(img, type = 'team') {
-        if (img) {
+    handleImgError(img, fallbackUrl) {
+        if (img && img.src !== fallbackUrl) {
             img.onerror = null;
-            img.src = type === 'team' ? TEAM_PLACEHOLDER_LOGO : PLAYER_PLACEHOLDER_AVATAR;
+            img.src = fallbackUrl;
         }
     },
 
@@ -342,383 +349,346 @@ const App = {
     },
 
     buildTournamentCardHtml(t) {
-        const approved = t.current_approved_team_count || 0;
+        const approvedCount = t.current_approved_team_count || 0;
         const maxTeams = t.max_teams || 16;
-        const isFull = approved >= maxTeams || t.registration_status === 'FULL';
-        const progressPct = Math.min(100, Math.round((approved / maxTeams) * 100));
-
-        let prizePool = t.prize_info || '৳500 BDT';
-        if (prizePool.includes('$500 USD')) {
-            prizePool = prizePool.replace('$500 USD', '৳500 BDT');
-        }
-
-        let statusBadge = `<span class="badge badge-open">🟢 REGISTRATION OPEN</span>`;
-        if (isFull) {
-            statusBadge = `<span class="badge badge-closed">🛑 REGISTRATION FULL</span>`;
-        } else if (t.registration_status === 'CLOSED' || t.status === 'REGISTRATION_CLOSED') {
-            statusBadge = `<span class="badge badge-closed">🔴 REGISTRATION CLOSED</span>`;
-        } else if (t.status === 'ONGOING') {
-            statusBadge = `<span class="badge badge-ongoing">🔵 ONGOING</span>`;
-        } else if (t.status === 'COMPLETED') {
-            statusBadge = `<span class="badge badge-draft">🏆 COMPLETED</span>`;
-        }
+        const isFull = approvedCount >= maxTeams || t.registration_status === 'FULL';
+        const regBadgeClass = isFull ? 'badge-closed' : (t.registration_status === 'OPEN' ? 'badge-open' : 'badge-closed');
+        const regText = isFull ? '🔴 REGISTRATION FULL' : (t.registration_status === 'OPEN' ? '🟢 REGISTRATION OPEN' : '🔴 REGISTRATION CLOSED');
 
         return `
-            <div class="tournament-card glass-panel">
+            <div class="tournament-card glass-panel" onclick="App.showTournamentDetailsModal('${this.escapeHtml(t.slug || t.tournament_id)}')">
                 <div class="tournament-card-header">
+                    <span class="badge ${regBadgeClass}">${regText}</span>
+                    <span class="badge badge-draft">${this.escapeHtml(t.game_type || 'ESPORTS')}</span>
+                </div>
+                <h3 class="tournament-card-title">${this.escapeHtml(t.title)}</h3>
+                <p class="tournament-card-desc">${this.escapeHtml(t.description || 'Official GEN Esports competitive tournament.')}</p>
+                <div class="tournament-card-meta">
                     <div>
-                        <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase;">${this.escapeHtml(t.game_type || 'ESPORTS')}</div>
-                        <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-top: 0.2rem;">${this.escapeHtml(t.title)}</h3>
+                        <div class="meta-lbl">PRIZE POOL</div>
+                        <div class="meta-val" style="color: var(--accent-gold); font-weight: 700;">${this.escapeHtml(t.prize_info || 'TBD')}</div>
                     </div>
-                    ${statusBadge}
-                </div>
-                <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1.5rem; line-height: 1.5;">
-                    ${this.escapeHtml(t.description || 'GEN Esports Official Championship Tournament Series.')}
-                </p>
-
-                <div style="background: rgba(255,255,255,0.03); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
-                    <div>💰 <strong>Prize Pool:</strong><br><span style="color: var(--accent-gold); font-weight: 700;">${this.escapeHtml(prizePool)}</span></div>
-                    <div>⚔️ <strong>Format:</strong><br><span style="color: var(--text-primary); font-weight: 600;">${this.escapeHtml(t.format || 'Single Elimination')}</span></div>
-                </div>
-
-                <div style="margin-bottom: 1.5rem;">
-                    <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem;">
-                        <span>Approved Teams</span>
-                        <span style="color: ${isFull ? 'var(--accent-red)' : 'var(--accent-cyan)'};">${approved} / ${maxTeams} Teams ${isFull ? '(FULL)' : ''}</span>
-                    </div>
-                    <div style="width: 100%; height: 8px; background: rgba(255,255,255,0.1); border-radius: 4px; overflow: hidden;">
-                        <div style="width: ${progressPct}%; height: 100%; background: ${isFull ? 'var(--accent-red)' : 'linear-gradient(90deg, var(--accent-cyan), var(--accent-green))'}; border-radius: 4px;"></div>
+                    <div>
+                        <div class="meta-lbl">APPROVED ROSTERS</div>
+                        <div class="meta-val">${approvedCount} / ${maxTeams} Teams</div>
                     </div>
                 </div>
-
-                <div style="display: flex; gap: 0.75rem;">
-                    <button onclick="App.showTournamentDetailsModal('${this.escapeHtml(t.slug)}')" class="btn btn-secondary" style="flex: 1; font-size: 0.85rem;">
-                        ℹ️ Details & Teams
-                    </button>
-                    ${isFull ? `
-                        <button disabled class="btn btn-secondary" style="flex: 1; font-size: 0.85rem; opacity: 0.6; cursor: not-allowed;">
-                            🛑 Registration Full
-                        </button>
-                    ` : `
-                        <button onclick="App.openDiscordInvite()" class="btn btn-discord" style="flex: 1; font-size: 0.85rem;">
-                            💬 Register in Discord
-                        </button>
-                    `}
+                <div style="margin-top: 1rem; text-align: right;">
+                    <span style="color: var(--accent-cyan); font-weight: 600; font-size: 0.88rem;">View Details & Roster &rarr;</span>
                 </div>
             </div>
         `;
     },
 
     async showTournamentDetailsModal(slug) {
-        const t = await Api.getTournamentDetails(slug);
-        const approvedTeams = await Api.getApprovedTeams(slug);
-        if (!t) return;
-
-        const approved = t.current_approved_team_count || approvedTeams.length || 0;
-        const maxTeams = t.max_teams || 16;
-        const isFull = approved >= maxTeams || t.registration_status === 'FULL';
-
-        let prizePool = t.prize_info || '৳500 BDT';
-        if (prizePool.includes('$500 USD')) {
-            prizePool = prizePool.replace('$500 USD', '৳500 BDT');
-        }
-
-        const teamsListHtml = approvedTeams.length === 0 ? `
-            <div style="text-align: center; color: var(--text-muted); padding: 2rem; background: rgba(0,0,0,0.2); border-radius: var(--radius-md); border: 1px dashed var(--border-card);">
-                🛡️ No approved teams registered yet for this tournament.
-            </div>
-        ` : `
-            <div style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 280px; overflow-y: auto; padding-right: 0.25rem;">
-                ${approvedTeams.map(tm => {
-                    let logoUrl = tm.team_logo_url ? String(tm.team_logo_url).trim() : '';
-                    if (logoUrl.includes(':') || logoUrl.startsWith('file://')) {
-                        if (logoUrl.includes('uploads/')) {
-                            logoUrl = '/' + logoUrl.substring(logoUrl.indexOf('uploads/'));
-                        } else {
-                            logoUrl = TEAM_PLACEHOLDER_LOGO;
-                        }
-                    } else if (logoUrl && !logoUrl.startsWith('http') && !logoUrl.startsWith('data:') && !logoUrl.startsWith('/')) {
-                        logoUrl = '/' + logoUrl;
-                    }
-                    if (!logoUrl) {
-                        logoUrl = TEAM_PLACEHOLDER_LOGO;
-                    }
-                    const publicId = tm.public_id || tm.registration_id || 'GEN-TEAM-XXXX';
-                    return `
-                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-card); border-radius: var(--radius-md); padding: 0.85rem 1.1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
-                            <div style="display: flex; align-items: center; gap: 1rem;">
-                                <img src="${logoUrl}"
-                                     style="width: 44px; height: 44px; border-radius: 10px; object-fit: cover; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);"
-                                     onerror="App.handleImgError(this, 'team')">
-                                <div>
-                                    <div style="font-weight: 800; font-size: 1.02rem; color: #fff; display: flex; align-items: center; gap: 0.4rem;">
-                                        ${this.escapeHtml(tm.team_name)}
-                                        <span style="color: var(--accent-green); font-size: 0.85rem;" title="Verified Team">✓</span>
-                                    </div>
-                                    <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 600; margin-top: 0.15rem;">
-                                        Team ID: <code>${this.escapeHtml(publicId)}</code>
-                                    </div>
-                                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem;">
-                                        👑 Captain: <strong>${this.escapeHtml(tm.captain_name || 'Team Captain')}</strong>
-                                    </div>
-                                </div>
-                            </div>
-                            <div style="text-align: right;">
-                                <span class="badge badge-open" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;">VERIFIED ✓</span>
-                            </div>
-                        </div>
-                    `;
-                }).join('')}
-            </div>
-        `;
-
         this.showModal(`
-            <div style="max-width: 650px; margin: 0 auto;">
-                <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">${this.escapeHtml(t.game_type || 'ESPORTS')}</div>
-                <h2 style="font-family: var(--font-heading); font-size: 2.2rem; margin-top: 0.25rem; color: #fff;">${this.escapeHtml(t.title)}</h2>
-                <p style="color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.6; font-size: 0.95rem;">${this.escapeHtml(t.description || '')}</p>
-
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; margin: 1.5rem 0; background: rgba(0,0,0,0.4); border: 1px solid var(--border-card); padding: 1.25rem; border-radius: var(--radius-md);">
-                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">PRIZE POOL</span><br><strong style="color: var(--accent-gold); font-size: 1.1rem;">${this.escapeHtml(prizePool)}</strong></div>
-                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">FORMAT</span><br><strong style="font-size: 1rem;">${this.escapeHtml(t.format || 'Single Elimination')}</strong></div>
-                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">MAX TEAMS</span><br><strong style="font-size: 1rem;">${maxTeams} Teams</strong></div>
-                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">APPROVED TEAMS</span><br><strong style="color: ${isFull ? 'var(--accent-red)' : 'var(--accent-cyan)'}; font-size: 1rem;">${approved} / ${maxTeams} ${isFull ? '(FULL)' : ''}</strong></div>
-                </div>
-
-                <h4 style="font-family: var(--font-heading); font-size: 1.15rem; margin-bottom: 0.75rem; color: #fff;">📜 Tournament Rules</h4>
-                <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-card); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.9rem; max-height: 130px; overflow-y: auto; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.6;">
-                    ${this.escapeHtml(t.rules_text || 'Official GEN Esports Rules apply.')}
-                </div>
-
-                <h4 style="font-family: var(--font-heading); font-size: 1.15rem; margin-bottom: 0.85rem; color: #fff; display: flex; align-items: center; justify-content: space-between;">
-                    <span>🛡️ Registered Teams (${approvedTeams.length})</span>
-                    <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 500;">Approved Roster Profiles</span>
-                </h4>
-                ${teamsListHtml}
-
-                <div style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 1rem;">
-                    ${isFull ? `
-                        <button disabled class="btn btn-secondary" style="width: 100%; opacity: 0.6; cursor: not-allowed; padding: 0.85rem;">
-                            🛑 Registration Full
-                        </button>
-                    ` : `
-                        <button onclick="App.openDiscordInvite()" class="btn btn-discord" style="width: 100%; padding: 0.85rem; font-size: 1rem;">
-                            💬 Register Team on Discord
-                        </button>
-                    `}
-                </div>
+            <div style="text-align: center; padding: 2rem;">
+                <div class="spinner" style="margin: 0 auto 1rem;"></div>
+                <p style="color: var(--text-secondary);">Loading tournament details...</p>
             </div>
         `);
+
+        try {
+            const data = await Api.getTournamentDetails(slug);
+            if (!data || !data.tournament) {
+                this.showModal(`
+                    <div style="text-align: center; padding: 2rem;">
+                        <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Tournament Not Found</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Could not load details for this tournament.</p>
+                    </div>
+                `);
+                return;
+            }
+
+            const t = data.tournament;
+            const teams = data.approved_teams || [];
+            const approvedCount = teams.length;
+            const maxTeams = t.max_teams || 16;
+            const isFull = approvedCount >= maxTeams || t.registration_status === 'FULL';
+
+            this.showModal(`
+                <div style="max-width: 700px; margin: 0 auto;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
+                        <span class="badge ${isFull ? 'badge-closed' : 'badge-open'}">${isFull ? '🔴 FULL' : t.registration_status}</span>
+                        <span style="color: var(--accent-gold); font-weight: 700; font-size: 1.1rem;">🏆 Prize: ${this.escapeHtml(t.prize_info || 'TBD')}</span>
+                    </div>
+
+                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem; margin-bottom: 0.5rem;">${this.escapeHtml(t.title)}</h2>
+                    <p style="color: var(--text-secondary); line-height: 1.6; font-size: 0.95rem; margin-bottom: 1.5rem;">${this.escapeHtml(t.description || '')}</p>
+
+                    <div style="background: rgba(0,0,0,0.3); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
+                        <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem; color: var(--accent-cyan);">📜 Tournament Rules & Format</h4>
+                        <p style="color: var(--text-secondary); font-size: 0.88rem; line-height: 1.6; white-space: pre-line;">${this.escapeHtml(t.rules_text || 'Standard GEN Esports Tournament Rules apply.')}</p>
+                    </div>
+
+                    <h4 style="font-family: var(--font-heading); font-size: 1.2rem; margin-bottom: 1rem;">🛡️ Approved Registered Teams (${approvedCount} / ${maxTeams})</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; max-height: 250px; overflow-y: auto; padding-right: 0.5rem;">
+                        ${teams.length === 0 ? `
+                            <div style="color: var(--text-muted); font-size: 0.9rem; grid-column: 1 / -1;">No approved teams yet. Register your team on Discord!</div>
+                        ` : teams.map(tm => `
+                            <div style="display: flex; align-items: center; gap: 0.75rem; background: rgba(255,255,255,0.04); padding: 0.6rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                                <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 28px; height: 28px; border-radius: 6px; object-fit: cover;">
+                                <div style="font-weight: 600; font-size: 0.9rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(tm.name)}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <div style="margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-card); padding-top: 1.25rem;">
+                        <button onclick="App.openDiscordInvite()" class="btn btn-discord">
+                            💬 Register Team in Discord
+                        </button>
+                        <button onclick="App.hideModal()" class="btn btn-secondary">Close</button>
+                    </div>
+                </div>
+            `);
+        } catch (err) {
+            console.error('Error opening tournament details modal:', err);
+        }
     },
 
     // RENDER TEAMS VIEW
     async renderTeamsView() {
         const container = document.getElementById('app-content');
-        const teams = await Api.getTeams();
+        if (!container) return;
+
+        let teams = [];
+        try {
+            teams = await Api.getApprovedTeams('');
+        } catch (e) {
+            console.warn('Error fetching teams:', e);
+        }
 
         container.innerHTML = `
-            <div style="margin-bottom: 3rem;">
-                <div class="hero-badge">🛡️ ESPORTS TEAMS</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    REGISTERED <span class="gradient-text">TEAMS & DIRECTORY</span>
+            <div style="margin-bottom: 2.5rem;">
+                <div class="hero-badge">🛡️ COMPETITIVE ROSTERS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                    REGISTERED <span class="gradient-text">TEAMS & CLANS</span>
                 </h1>
-                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
-                    Explore official esports team profiles and verified rosters.
+                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
+                    All officially verified teams competing across GEN Esports tournaments.
                 </p>
             </div>
 
-            <div class="teams-grid">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem;">
                 ${teams.length === 0 ? `
-                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                    <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; grid-column: 1 / -1;">
                         <div style="font-size: 3rem; margin-bottom: 1rem;">🛡️</div>
-                        <h3>No Teams Listed</h3>
-                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Team profiles will automatically post here upon registration.</p>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Teams Registered</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Be the first to register your roster on our Discord server!</p>
                     </div>
-                ` : teams.map(tm => {
-                    const isVerified = tm.verification_status === 'VERIFIED';
-                    const logoSrc = tm.logo_url ? (tm.logo_url.startsWith('http') ? tm.logo_url : `/${tm.logo_url}`) : TEAM_PLACEHOLDER_LOGO;
-                    return `
-                        <div class="team-card glass-panel" onclick="App.showTeamProfileModal('${tm.slug}')">
-                            <div class="team-card-header">
-                                <img src="${logoSrc}" alt="${tm.name}" class="team-logo-lg" onerror="this.src=TEAM_PLACEHOLDER_LOGO">
-                                <div>
-                                    <div class="team-info-name">${tm.name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</div>
-                                    <div class="team-info-captain">🏷️ ID: ${tm.public_id}</div>
-                                </div>
+                ` : teams.map(tm => `
+                    <div class="glass-panel" style="padding: 1.5rem; display: flex; align-items: center; gap: 1rem; cursor: pointer; transition: transform 0.2s ease;" onclick="App.showTeamProfileModal(${tm.team_id})">
+                        <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 54px; height: 54px; border-radius: var(--radius-sm); object-fit: cover; border: 2px solid var(--border-card);">
+                        <div>
+                            <h3 style="font-family: var(--font-heading); font-size: 1.2rem; color: #fff;">${this.escapeHtml(tm.name)}</h3>
+                            <div style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                                👑 Captain: <span style="color: var(--accent-gold); font-weight: 600;">${this.escapeHtml(tm.captain_name || 'N/A')}</span>
                             </div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 0.5rem;">
-                                🎮 Game: <strong>${tm.game || 'VALORANT'}</strong> | Region: <strong>${tm.region || 'South Asia'}</strong>
-                            </div>
-                            <button class="btn btn-secondary" style="width: 100%; margin-top: 0.75rem; font-size: 0.85rem;">
-                                👁️ View Team Roster & History
-                            </button>
+                            <div style="font-size: 0.78rem; color: var(--accent-cyan); margin-top: 0.35rem; font-weight: 600;">View Roster & Stats &rarr;</div>
                         </div>
-                    `;
-                }).join('')}
+                    </div>
+                `).join('')}
             </div>
         `;
     },
 
-    async showTeamProfileModal(slug) {
-        const team = await Api.getTeamProfile(slug);
-        if (!team) return;
-
-        const isVerified = team.verification_status === 'VERIFIED';
-        const logoSrc = team.logo_url ? (team.logo_url.startsWith('http') ? team.logo_url : `/${team.logo_url}`) : TEAM_PLACEHOLDER_LOGO;
-
+    async showTeamProfileModal(teamId) {
         this.showModal(`
-            <div style="text-align: center; margin-bottom: 1.5rem;">
-                <img src="${logoSrc}" style="width: 80px; height: 80px; border-radius: 12px; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src=TEAM_PLACEHOLDER_LOGO">
-                <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${team.name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h2>
-                <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏷️ Public ID: ${team.public_id}</div>
-                <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">🎮 ${team.game || 'VALORANT'} • 🌍 ${team.region || 'South Asia'}</div>
-            </div>
-
-            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">👥 Active Roster (${(team.roster || []).length})</h4>
-            <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.3); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
-                ${(team.roster || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No roster members found.</div>' : (team.roster || []).map(p => `
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                        <span style="font-weight: 700; color: var(--accent-cyan); font-size: 0.85rem;">${p.role}</span>
-                        <span style="font-weight: 600;">${p.display_name || p.username} (${p.public_id})</span>
-                    </div>
-                `).join('')}
-            </div>
-
-            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">📜 Tournament History</h4>
-            <div style="background: rgba(0,0,0,0.3); padding: 1rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); font-size: 0.9rem;">
-                ${(team.tournament_history || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No tournament history recorded yet.</div>' : (team.tournament_history || []).map(h => `
-                    <div style="display: flex; justify-content: space-between; padding: 0.4rem 0;">
-                        <span>🏆 <strong>${h.tournament_name}</strong></span>
-                        <span class="badge badge-open">${h.status}</span>
-                    </div>
-                `).join('')}
+            <div style="text-align: center; padding: 2rem;">
+                <div class="spinner" style="margin: 0 auto 1rem;"></div>
+                <p style="color: var(--text-secondary);">Loading team profile...</p>
             </div>
         `);
+
+        try {
+            const data = await Api.getTeamProfile(teamId);
+            if (!data || !data.team) {
+                this.showModal(`
+                    <div style="text-align: center; padding: 2rem;">
+                        <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Team Not Found</h3>
+                    </div>
+                `);
+                return;
+            }
+
+            const tm = data.team;
+            const members = data.members || [];
+            const stats = data.stats || { matches_played: 0, wins: 0, losses: 0 };
+
+            this.showModal(`
+                <div style="max-width: 650px; margin: 0 auto;">
+                    <div style="display: flex; align-items: center; gap: 1.25rem; margin-bottom: 1.5rem;">
+                        <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 72px; height: 72px; border-radius: var(--radius-md); object-fit: cover; border: 2px solid var(--accent-cyan);">
+                        <div>
+                            <h2 style="font-family: var(--font-heading); font-size: 2rem; color: #fff;">${this.escapeHtml(tm.name)}</h2>
+                            <div style="color: var(--accent-gold); font-weight: 600; font-size: 0.95rem; margin-top: 0.25rem;">
+                                👑 Captain: ${this.escapeHtml(tm.captain_name || 'N/A')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="stats-banner glass-panel" style="margin-bottom: 1.5rem;">
+                        <div class="stat-box"><div class="stat-val">${stats.matches_played}</div><div class="stat-lbl">Matches</div></div>
+                        <div class="stat-box"><div class="stat-val" style="color: var(--accent-green);">${stats.wins}</div><div class="stat-lbl">Wins</div></div>
+                        <div class="stat-box"><div class="stat-val" style="color: var(--accent-red);">${stats.losses}</div><div class="stat-lbl">Losses</div></div>
+                    </div>
+
+                    <h4 style="font-family: var(--font-heading); font-size: 1.2rem; margin-bottom: 1rem;">👥 Roster Members (${members.length})</h4>
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 220px; overflow-y: auto;">
+                        ${members.map(m => `
+                            <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); padding: 0.75rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                    <span style="font-size: 1.2rem;">👤</span>
+                                    <div>
+                                        <div style="font-weight: 700; color: #fff;">${this.escapeHtml(m.display_name)}</div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted);">In-Game ID: ${this.escapeHtml(m.in_game_id || 'N/A')}</div>
+                                    </div>
+                                </div>
+                                <span class="badge ${m.role === 'CAPTAIN' ? 'badge-ongoing' : 'badge-draft'}">${this.escapeHtml(m.role || 'MEMBER')}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+
+                    <div style="margin-top: 1.5rem; text-align: right;">
+                        <button onclick="App.hideModal()" class="btn btn-secondary">Close</button>
+                    </div>
+                </div>
+            `);
+        } catch (err) {
+            console.error('Error fetching team profile:', err);
+        }
     },
 
     // RENDER PLAYERS VIEW
     async renderPlayersView() {
         const container = document.getElementById('app-content');
-        const players = await Api.getPlayers();
+        if (!container) return;
+
+        let players = [];
+        try {
+            players = await Api.getPlayers();
+        } catch (e) {
+            console.warn('Error fetching players:', e);
+        }
 
         container.innerHTML = `
-            <div style="margin-bottom: 3rem;">
+            <div style="margin-bottom: 2.5rem;">
                 <div class="hero-badge">👤 PLAYER DIRECTORY</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    VERIFIED <span class="gradient-text">PLAYERS</span>
+                <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                    REGISTERED <span class="gradient-text">COMPETITORS</span>
                 </h1>
-                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
-                    Browse active competitor profiles, public IDs, and game statistics.
+                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
+                    Browse verified competitive players, in-game handles, and team affiliations.
                 </p>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.5rem;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.25rem;">
                 ${players.length === 0 ? `
-                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                    <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; grid-column: 1 / -1;">
                         <div style="font-size: 3rem; margin-bottom: 1rem;">👤</div>
-                        <h3>No Players Registered</h3>
-                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Player profiles will automatically post here upon registration.</p>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Players Found</h3>
                     </div>
-                ` : players.map(p => {
-                    const isVerified = p.verification_status === 'VERIFIED';
-                    const avatarSrc = p.avatar_url || PLAYER_PLACEHOLDER_AVATAR;
-                    return `
-                        <div class="glass-panel" style="padding: 1.25rem; text-align: center; cursor: pointer;" onclick="App.showPlayerProfileModal('${p.public_id}')">
-                            <img src="${avatarSrc}" style="width: 64px; height: 64px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src=PLAYER_PLACEHOLDER_AVATAR">
-                            <h3 style="font-family: var(--font-heading); font-size: 1.2rem;">${p.display_name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h3>
-                            <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; margin-top: 0.2rem;">🏷️ ${p.public_id}</div>
-                            <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">🎮 ${p.primary_game || 'VALORANT'}</div>
+                ` : players.map(p => `
+                    <div class="glass-panel" style="padding: 1.25rem; display: flex; align-items: center; gap: 1rem; cursor: pointer;" onclick="App.showPlayerProfileModal('${p.public_id || p.discord_id}')">
+                        <img src="${PLAYER_PLACEHOLDER_AVATAR}" style="width: 46px; height: 46px; border-radius: 50%; border: 2px solid var(--border-card);">
+                        <div>
+                            <div style="font-weight: 700; color: #fff; font-size: 1.05rem;">${this.escapeHtml(p.display_name)}</div>
+                            <div style="font-size: 0.8rem; color: var(--accent-cyan);">ID: ${this.escapeHtml(p.public_id || 'GEN-P')}</div>
+                            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem;">🛡️ ${this.escapeHtml(p.primary_team || 'Free Agent')}</div>
                         </div>
-                    `;
-                }).join('')}
+                    </div>
+                `).join('')}
             </div>
         `;
     },
 
-    async showPlayerProfileModal(slug) {
-        const player = await Api.getPlayerProfile(slug);
-        if (!player) return;
-
-        const isVerified = player.verification_status === 'VERIFIED';
-        const avatarSrc = player.avatar_url || PLAYER_PLACEHOLDER_AVATAR;
-        const stats = player.stats || {};
-
+    async showPlayerProfileModal(playerId) {
         this.showModal(`
-            <div style="text-align: center; margin-bottom: 1.5rem;">
-                <img src="${avatarSrc}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; margin-bottom: 0.75rem;" onerror="this.src=PLAYER_PLACEHOLDER_AVATAR">
-                <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${player.display_name} ${isVerified ? '<span style="color: var(--accent-green);">✅</span>' : ''}</h2>
-                <div style="font-size: 0.9rem; color: var(--accent-cyan); font-weight: 600;">🏷️ Public ID: ${player.public_id}</div>
-                <div style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.25rem;">🎮 Primary Game: ${player.primary_game || 'VALORANT'}</div>
-            </div>
-
-            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-bottom: 1.5rem; background: rgba(255,255,255,0.03); padding: 1rem; border-radius: var(--radius-md); text-align: center;">
-                <div><span style="color: var(--text-muted); font-size: 0.8rem;">MATCHES</span><br><strong style="font-size: 1.2rem;">${stats.matches_played ?? 0}</strong></div>
-                <div><span style="color: var(--text-muted); font-size: 0.8rem;">WINS</span><br><strong style="font-size: 1.2rem; color: var(--accent-green);">${stats.wins ?? 0}</strong></div>
-                <div><span style="color: var(--text-muted); font-size: 0.8rem;">WIN RATE</span><br><strong style="font-size: 1.2rem; color: var(--accent-gold);">${stats.win_rate ?? 0}%</strong></div>
-            </div>
-
-            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">🛡️ Active Teams</h4>
-            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
-                ${(player.teams || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No active team membership.</div>' : (player.teams || []).map(t => `
-                    <div style="display: flex; justify-content: space-between; padding: 0.4rem 0;">
-                        <span>🛡️ <strong>${t.team_name}</strong></span>
-                        <span style="color: var(--accent-cyan); font-weight: 700; font-size: 0.85rem;">${t.role}</span>
-                    </div>
-                `).join('')}
-            </div>
-
-            <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">🏅 Achievements</h4>
-            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-md); border: 1px solid var(--border-card);">
-                ${(player.achievements || []).length === 0 ? '<div style="color: var(--text-muted); text-align: center;">No achievements recorded yet.</div>' : (player.achievements || []).map(a => `
-                    <div style="display: flex; align-items: center; gap: 0.75rem; padding: 0.4rem 0;">
-                        <span style="font-size: 1.5rem;">${a.badge_icon || '🏆'}</span>
-                        <div><strong>${a.title}</strong><br><span style="font-size: 0.8rem; color: var(--text-muted);">${a.description || ''}</span></div>
-                    </div>
-                `).join('')}
+            <div style="text-align: center; padding: 2rem;">
+                <div class="spinner" style="margin: 0 auto 1rem;"></div>
+                <p style="color: var(--text-secondary);">Loading player profile...</p>
             </div>
         `);
+
+        try {
+            const p = await Api.getPlayerProfile(playerId);
+            if (!p) {
+                this.showModal(`
+                    <div style="text-align: center; padding: 2rem;">
+                        <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Player Not Found</h3>
+                    </div>
+                `);
+                return;
+            }
+
+            this.showModal(`
+                <div style="max-width: 500px; margin: 0 auto; text-align: center;">
+                    <img src="${PLAYER_PLACEHOLDER_AVATAR}" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid var(--accent-cyan); margin-bottom: 1rem;">
+                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${this.escapeHtml(p.display_name)}</h2>
+                    <div style="color: var(--accent-cyan); font-weight: 700; font-size: 0.95rem; margin-bottom: 1.5rem;">Public ID: ${this.escapeHtml(p.public_id)}</div>
+
+                    <div style="background: rgba(0,0,0,0.3); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); text-align: left; margin-bottom: 1.5rem;">
+                        <div style="margin-bottom: 0.75rem;">🎮 <strong>In-Game Name/ID:</strong> ${this.escapeHtml(p.in_game_id || 'N/A')}</div>
+                        <div style="margin-bottom: 0.75rem;">🛡️ <strong>Current Team:</strong> ${this.escapeHtml(p.primary_team || 'Free Agent')}</div>
+                        <div>📅 <strong>Registered:</strong> ${this.escapeHtml(p.created_at || 'Recent')}</div>
+                    </div>
+
+                    <button onclick="App.hideModal()" class="btn btn-secondary">Close</button>
+                </div>
+            `);
+        } catch (err) {
+            console.error('Error fetching player profile:', err);
+        }
     },
 
     // RENDER MATCHES VIEW
     async renderMatchesView() {
         const container = document.getElementById('app-content');
-        const matches = await Api.getMatches();
+        if (!container) return;
+
+        let matches = [];
+        try {
+            matches = await Api.getMatches();
+        } catch (e) {
+            console.warn('Error fetching matches:', e);
+        }
 
         container.innerHTML = `
-            <div style="margin-bottom: 3rem;">
-                <div class="hero-badge">⚔️ TOURNAMENT SCHEDULE</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    MATCH <span class="gradient-text">CENTER</span>
+            <div style="margin-bottom: 2.5rem;">
+                <div class="hero-badge">⚔️ COMPETITIVE MATCHES</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                    LIVE MATCHES & <span class="gradient-text">RESULTS</span>
                 </h1>
-                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
-                    Live, upcoming, and completed match results recorded directly by tournament administrators.
+                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
+                    Real-time match schedules, live scores, map picks, and bracket advancement.
                 </p>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1.5rem;">
+            <div style="display: flex; flex-direction: column; gap: 1rem;">
                 ${matches.length === 0 ? `
-                    <div class="glass-panel" style="padding: 4rem; text-align: center; grid-column: 1 / -1;">
+                    <div class="glass-panel" style="padding: 4rem 2rem; text-align: center;">
                         <div style="font-size: 3rem; margin-bottom: 1rem;">⚔️</div>
-                        <h3>No Matches Scheduled</h3>
-                        <p style="color: var(--text-secondary);">Matches will appear here once brackets are generated by administrators.</p>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Active Matches</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Matches will appear here once brackets are generated by admins.</p>
                     </div>
                 ` : matches.map(m => `
-                    <div class="glass-panel" style="padding: 1.25rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; font-size: 0.8rem; color: var(--text-muted);">
-                            <span>🏆 ${m.tournament_name || 'GEN Tournament'}</span>
-                            <span class="badge ${m.status === 'COMPLETED' ? 'badge-closed' : (m.status === 'LIVE' ? 'badge-open' : 'badge-draft')}">${m.status}</span>
+                    <div class="glass-panel" style="padding: 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                        <div style="display: flex; align-items: center; gap: 1.5rem; flex: 1; min-width: 280px;">
+                            <div style="text-align: right; flex: 1;">
+                                <div style="font-weight: 800; font-size: 1.1rem; color: #fff;">${this.escapeHtml(m.team1_name || 'TBD')}</div>
+                                <div style="font-size: 1.5rem; font-weight: 900; color: var(--accent-cyan);">${m.team1_score ?? 0}</div>
+                            </div>
+                            <div style="font-weight: 900; font-size: 1.2rem; color: var(--text-muted); padding: 0 0.5rem;">VS</div>
+                            <div style="text-align: left; flex: 1;">
+                                <div style="font-weight: 800; font-size: 1.1rem; color: #fff;">${this.escapeHtml(m.team2_name || 'TBD')}</div>
+                                <div style="font-size: 1.5rem; font-weight: 900; color: var(--accent-gold);">${m.team2_score ?? 0}</div>
+                            </div>
                         </div>
-                        <div style="font-size: 0.85rem; font-weight: 700; color: var(--accent-cyan); margin-bottom: 0.75rem;">${m.stage_name || 'Stage Match'}</div>
 
-                        <div style="display: flex; flex-direction: column; gap: 0.5rem; background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm);">
-                            <div style="display: flex; justify-content: space-between; align-items: center; font-weight: 600;">
-                                <span>🛡️ ${m.team1_name || 'TBD'}</span>
-                                <span style="font-family: var(--font-heading); font-size: 1.2rem; color: var(--accent-gold);">${m.team1_score ?? 0}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; align-items: center; font-weight: 600;">
-                                <span>🛡️ ${m.team2_name || 'TBD'}</span>
-                                <span style="font-family: var(--font-heading); font-size: 1.2rem; color: var(--accent-gold);">${m.team2_score ?? 0}</span>
-                            </div>
+                        <div style="text-align: right; border-left: 1px solid var(--border-card); padding-left: 1.5rem;">
+                            <span class="badge ${m.status === 'COMPLETED' ? 'badge-closed' : 'badge-open'}">${m.status}</span>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.35rem;">🏆 ${this.escapeHtml(m.tournament_name || 'GEN Esports')}</div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">${this.escapeHtml(m.stage_name || 'Round 1')}</div>
                         </div>
                     </div>
                 `).join('')}
@@ -729,136 +699,115 @@ const App = {
     // RENDER BRACKETS VIEW
     async renderBracketsView() {
         const container = document.getElementById('app-content');
-        const tournaments = await Api.getTournaments();
+        if (!container) return;
 
-        if (tournaments.length > 0 && !this.activeTournamentSlug) {
-            this.activeTournamentSlug = tournaments[0].slug;
+        let tournaments = [];
+        try {
+            tournaments = await Api.getTournaments();
+        } catch (e) {
+            console.warn('Error fetching tournaments for bracket:', e);
         }
 
-        const data = this.activeTournamentSlug ? await Api.getTournamentBracket(this.activeTournamentSlug) : { tournament: null, has_bracket: false, rounds: [], champion: null };
-        const t_info = data.tournament || {};
-        const rounds = data.rounds || [];
-        const champion = data.champion;
+        const activeSlug = this.activeTournamentSlug || (tournaments[0] ? tournaments[0].slug : '');
+        let bracketMatches = [];
+        if (activeSlug) {
+            try {
+                bracketMatches = await Api.getTournamentBracket(activeSlug);
+            } catch (e) {
+                console.warn('Error fetching bracket:', e);
+            }
+        }
 
         container.innerHTML = `
-            <div style="margin-bottom: 2rem;">
-                <div class="hero-badge">🏆 DYNAMIC BRACKET VIEWER</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    TOURNAMENT <span class="gradient-text">BRACKET</span>
-                </h1>
-                <p style="color: var(--text-secondary); max-width: 650px; margin-top: 0.5rem;">
-                    Inspect live tournament brackets, match progression, and grand champions in real-time.
-                </p>
-            </div>
-
-            <div style="margin-bottom: 2rem; display: flex; gap: 1.5rem; align-items: center; justify-content: space-between; flex-wrap: wrap;" class="glass-panel">
-                <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; padding: 1rem 1.5rem;">
-                    <label style="font-weight: 700; color: var(--accent-cyan);">Select Tournament:</label>
-                    <select onchange="App.changeBracketTournament(this.value)" class="form-select" style="max-width: 340px;">
-                        ${tournaments.map(t => `<option value="${t.slug}" ${t.slug === this.activeTournamentSlug ? 'selected' : ''}>${t.title}</option>`).join('')}
-                    </select>
+            <div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <div class="hero-badge">🌳 TOURNAMENT BRACKET</div>
+                    <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                        LIVE BRACKET <span class="gradient-text">TREE</span>
+                    </h1>
                 </div>
-                ${t_info.title ? `
-                    <div style="display: flex; gap: 1rem; font-size: 0.85rem; font-weight: 600; padding: 1rem 1.5rem;">
-                        <span class="badge badge-open">Status: ${t_info.status || 'ACTIVE'}</span>
-                        <span class="badge badge-draft">Format: ${t_info.format || 'Single Elimination'}</span>
-                        <span class="badge badge-closed">Registered Teams: ${t_info.registered_teams_count ?? 0}</span>
-                    </div>
+
+                ${tournaments.length > 0 ? `
+                    <select onchange="App.changeBracketTournament(this.value)" class="form-select" style="max-width: 300px; background: rgba(0,0,0,0.4);">
+                        ${tournaments.map(t => `<option value="${t.slug}" ${t.slug === activeSlug ? 'selected' : ''}>🏆 ${this.escapeHtml(t.title)}</option>`).join('')}
+                    </select>
                 ` : ''}
             </div>
 
-            ${champion ? `
-                <div class="champion-banner">
-                    <div style="font-size: 2.5rem;">🏆</div>
-                    <div class="champion-title">GRAND CHAMPION</div>
-                    <div style="font-size: 1.8rem; font-weight: 800; color: #fff; margin-top: 0.5rem;">${champion.name}</div>
-                    <div style="color: var(--accent-gold); font-weight: 700; letter-spacing: 1px; margin-top: 0.25rem;">TOURNAMENT WINNER</div>
+            ${bracketMatches.length === 0 ? `
+                <div class="glass-panel" style="padding: 4rem 2rem; text-align: center;">
+                    <div style="font-size: 3.5rem; margin-bottom: 1rem;">🌳</div>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.6rem;">Bracket Tree Not Generated Yet</h3>
+                    <p style="color: var(--text-secondary); margin-top: 0.5rem;">
+                        The tournament organizer will generate the single/double elimination bracket once registration closes.
+                    </p>
                 </div>
-            ` : ''}
-
-            <div class="bracket-wrapper glass-panel">
-                ${!data.has_bracket ? `
-                    <div style="padding: 4rem 2rem; text-align: center; width: 100%;">
-                        <div style="font-size: 3.5rem; margin-bottom: 1rem;">🏆</div>
-                        <h2 style="font-family: var(--font-heading); font-size: 1.8rem; color: var(--accent-cyan);">BRACKET NOT GENERATED YET</h2>
-                        <p style="color: var(--text-secondary); max-width: 550px; margin: 0.75rem auto 1.5rem;">
-                            Tournament registration is currently underway. The bracket will appear here automatically once tournament seeding is completed by administrators.
-                        </p>
-                        <div style="display: inline-flex; gap: 1rem; background: rgba(0,0,0,0.3); padding: 0.75rem 1.5rem; border-radius: var(--radius-md); font-weight: 600; font-size: 0.9rem;">
-                            <span>Approved Teams: <strong style="color: var(--accent-gold);">${t_info.registered_teams_count ?? 0}</strong></span>
-                            <span>•</span>
-                            <span>Seeding Status: <strong style="color: var(--accent-cyan);">PENDING</strong></span>
-                        </div>
+            ` : `
+                <div class="glass-panel" style="padding: 2rem; overflow-x: auto;">
+                    <div style="display: flex; gap: 3rem; min-width: 800px; justify-content: space-around;">
+                        ${this.buildBracketTreeHtml(bracketMatches)}
                     </div>
-                ` : `
-                    <div class="bracket-container">
-                        ${rounds.map((r, rIdx) => `
-                            <div class="bracket-round">
-                                <div class="bracket-round-title">${r.round_name || 'Round ' + r.round_number}</div>
-                                <div style="display: flex; flex-direction: column; gap: 2rem; height: 100%; justify-content: space-around;">
-                                    ${r.matches.map(m => `
-                                        <div class="bracket-match-card">
-                                            <div class="bracket-match-header">
-                                                <span>#${m.public_match_id || m.match_id}</span>
-                                                <span class="badge ${m.status === 'COMPLETED' ? 'badge-final' : (m.status === 'IN_PROGRESS' || m.status === 'READY' ? 'badge-live' : 'badge-upcoming')}">
-                                                    ${m.status === 'COMPLETED' ? 'FINAL' : (m.status === 'IN_PROGRESS' || m.status === 'READY' ? '🔴 LIVE' : 'UPCOMING')}
-                                                </span>
-                                            </div>
-                                            <div class="bracket-team-row ${m.winner_id && m.winner_id === m.team1_id ? 'winner' : ''}">
-                                                <div class="bracket-team-info">
-                                                    <span>🛡️</span>
-                                                    <span>${m.team1_name || 'TBD'}</span>
-                                                </div>
-                                                <span class="bracket-score">${m.team1_score ?? '-'}</span>
-                                            </div>
-                                            <div class="bracket-team-row ${m.winner_id && m.winner_id === m.team2_id ? 'winner' : ''}">
-                                                <div class="bracket-team-info">
-                                                    <span>🛡️</span>
-                                                    <span>${m.team2_name || 'TBD'}</span>
-                                                </div>
-                                                <span class="bracket-score">${m.team2_score ?? '-'}</span>
-                                            </div>
-                                            ${rIdx < rounds.length - 1 ? '<div class="bracket-connector-line"></div>' : ''}
-                                        </div>
-                                    `).join('')}
-                                </div>
-                            </div>
-                        `).join('')}
-                    </div>
-                `}
-            </div>
+                </div>
+            `}
         `;
     },
 
-    async changeBracketTournament(slug) {
+    buildBracketTreeHtml(matches) {
+        // Group matches by round / stage
+        const rounds = {};
+        matches.forEach(m => {
+            const r = m.stage_name || 'Round 1';
+            if (!rounds[r]) rounds[r] = [];
+            rounds[r].push(m);
+        });
+
+        return Object.keys(rounds).map(rName => `
+            <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-around;">
+                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; text-align: center; margin-bottom: 1.5rem; color: var(--accent-cyan); border-bottom: 1px solid var(--border-card); padding-bottom: 0.5rem;">${this.escapeHtml(rName)}</h4>
+                <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+                    ${rounds[rName].map(m => `
+                        <div style="background: rgba(0,0,0,0.5); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 0.75rem;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; margin-bottom: 0.35rem; color: ${m.winner_id && m.winner_id === m.team1_id ? 'var(--accent-cyan)' : '#fff'};">
+                                <span>🛡️ ${this.escapeHtml(m.team1_name || 'TBD')}</span>
+                                <span>${m.team1_score ?? 0}</span>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; color: ${m.winner_id && m.winner_id === m.team2_id ? 'var(--accent-cyan)' : '#fff'};">
+                                <span>🛡️ ${this.escapeHtml(m.team2_name || 'TBD')}</span>
+                                <span>${m.team2_score ?? 0}</span>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('');
+    },
+
+    changeBracketTournament(slug) {
         this.activeTournamentSlug = slug;
-        await this.renderBracketsView();
+        this.renderBracketsView();
     },
 
     // RENDER LEADERBOARDS VIEW
     async renderLeaderboardsView() {
         const container = document.getElementById('app-content');
-        const tournaments = await Api.getTournaments();
+        if (!container) return;
 
-        if (tournaments.length > 0 && !this.activeTournamentSlug) {
-            this.activeTournamentSlug = tournaments[0].slug;
+        let leaderboard = [];
+        try {
+            leaderboard = await Api.getLeaderboard();
+        } catch (e) {
+            console.warn('Error fetching leaderboard:', e);
         }
 
-        const standings = this.activeTournamentSlug ? await Api.getTournamentStandings(this.activeTournamentSlug) : [];
-
         container.innerHTML = `
-            <div style="margin-bottom: 2rem;">
-                <div class="hero-badge">📊 RANKINGS</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.8rem; margin-top: 0.5rem;">
-                    TOURNAMENT <span class="gradient-text">LEADERBOARD</span>
+            <div style="margin-bottom: 2.5rem;">
+                <div class="hero-badge">🥇 STANDINGS & RANKINGS</div>
+                <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                    GLOBAL ESPORTS <span class="gradient-text">LEADERBOARD</span>
                 </h1>
-            </div>
-
-            <div style="margin-bottom: 2rem; display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
-                <label style="font-weight: 700; color: var(--accent-cyan);">Select Tournament:</label>
-                <select onchange="App.changeLeaderboardTournament(this.value)" class="form-select" style="max-width: 320px;">
-                    ${tournaments.map(t => `<option value="${t.slug}" ${t.slug === this.activeTournamentSlug ? 'selected' : ''}>${t.title}</option>`).join('')}
-                </select>
+                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
+                    Top performing teams ranked by tournament wins, series points, and match record.
+                </p>
             </div>
 
             <div class="data-table-wrapper glass-panel">
@@ -866,24 +815,39 @@ const App = {
                     <thead>
                         <tr>
                             <th>Rank</th>
-                            <th>Team Name</th>
-                            <th>Played</th>
+                            <th>Team</th>
+                            <th>Matches Played</th>
                             <th>Wins</th>
                             <th>Losses</th>
-                            <th>Points</th>
+                            <th>Win Rate</th>
+                            <th>Total Points</th>
                         </tr>
                     </thead>
                     <tbody>
-                        ${standings.length === 0 ? `
-                            <tr><td colspan="6" style="text-align: center; color: var(--text-muted); padding: 3rem;">No completed match data available for standings calculation yet.</td></tr>
-                        ` : standings.map((s, idx) => `
+                        ${leaderboard.length === 0 ? `
                             <tr>
-                                <td><strong style="color: ${idx === 0 ? 'var(--accent-gold)' : 'var(--text-primary)'};">#${idx + 1}</strong></td>
-                                <td><strong>🛡️ ${s.team_name}</strong></td>
-                                <td>${s.played}</td>
-                                <td style="color: var(--accent-green); font-weight: 700;">${s.wins}</td>
-                                <td style="color: var(--accent-red);">${s.losses}</td>
-                                <td><strong style="color: var(--accent-cyan); font-size: 1.1rem;">${s.points} PTS</strong></td>
+                                <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 3rem;">
+                                    No leaderboard standings calculated yet. Complete tournament matches to earn points!
+                                </td>
+                            </tr>
+                        ` : leaderboard.map((row, idx) => `
+                            <tr>
+                                <td>
+                                    <span style="font-weight: 900; font-size: 1.1rem; color: ${idx === 0 ? 'var(--accent-gold)' : (idx === 1 ? '#c0c0c0' : (idx === 2 ? '#cd7f32' : 'var(--text-muted)'))}">
+                                        #${idx + 1}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div style="display: flex; align-items: center; gap: 0.75rem;">
+                                        <img src="${this.escapeHtml(row.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 32px; height: 32px; border-radius: 6px; object-fit: cover;">
+                                        <strong style="color: #fff; font-size: 1rem;">${this.escapeHtml(row.team_name)}</strong>
+                                    </div>
+                                </td>
+                                <td>${row.matches_played}</td>
+                                <td><span style="color: var(--accent-green); font-weight: 700;">${row.wins}</span></td>
+                                <td><span style="color: var(--accent-red); font-weight: 700;">${row.losses}</span></td>
+                                <td><strong>${row.win_rate || '0%'}</strong></td>
+                                <td><strong style="color: var(--accent-gold); font-size: 1.1rem;">${row.points} PTS</strong></td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -892,9 +856,8 @@ const App = {
         `;
     },
 
-    async changeLeaderboardTournament(slug) {
-        this.activeTournamentSlug = slug;
-        await this.renderLeaderboardsView();
+    changeLeaderboardTournament(slug) {
+        this.renderLeaderboardsView();
     },
 
     // RENDER DASHBOARD VIEW
@@ -934,7 +897,7 @@ const App = {
                 <div>
                     <div class="hero-badge">👤 PLAYER DASHBOARD</div>
                     <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
-                        WELCOME BACK, <span class="gradient-text">${profile ? profile.display_name : 'COMPETITOR'}</span>
+                        WELCOME BACK, <span class="gradient-text">${profile ? this.escapeHtml(profile.display_name) : 'COMPETITOR'}</span>
                     </h1>
                 </div>
                 <button onclick="App.logoutUserDashboard()" class="btn btn-secondary" style="font-size: 0.85rem;">
@@ -943,7 +906,7 @@ const App = {
             </div>
 
             <div class="stats-banner glass-panel" style="margin-bottom: 2.5rem;">
-                <div class="stat-box"><div class="stat-val" style="color: var(--accent-cyan);">${profile ? profile.public_id : 'GEN-P-000000'}</div><div class="stat-lbl">Public ID</div></div>
+                <div class="stat-box"><div class="stat-val" style="color: var(--accent-cyan);">${profile ? this.escapeHtml(profile.public_id) : 'GEN-P-000000'}</div><div class="stat-lbl">Public ID</div></div>
                 <div class="stat-box"><div class="stat-val" style="color: var(--accent-gold);">${regs.length}</div><div class="stat-lbl">Registrations</div></div>
                 <div class="stat-box"><div class="stat-val" style="color: var(--accent-green);">${profile && profile.teams ? profile.teams.length : 0}</div><div class="stat-lbl">Active Teams</div></div>
                 <div class="stat-box"><div class="stat-val">${cases.length}</div><div class="stat-lbl">Support Cases</div></div>
@@ -956,10 +919,10 @@ const App = {
                         ${regs.length === 0 ? '<div style="color: var(--text-muted);">No registrations found. Register via Discord!</div>' : regs.map(r => `
                             <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
                                 <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.25rem;">
-                                    <span>🛡️ ${r.team_name}</span>
+                                    <span>🛡️ ${this.escapeHtml(r.team_name)}</span>
                                     <span class="badge ${r.status === 'APPROVED' ? 'badge-open' : 'badge-closed'}">${r.status}</span>
                                 </div>
-                                <div style="font-size: 0.8rem; color: var(--text-secondary);">🏆 ${r.tournament_name} • Code: <code>${r.registration_code || r.ticket_id}</code></div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">🏆 ${this.escapeHtml(r.tournament_name)} • Code: <code>${this.escapeHtml(r.registration_code || r.ticket_id)}</code></div>
                             </div>
                         `).join('')}
                     </div>
@@ -974,7 +937,7 @@ const App = {
                                     <span>🎧 Case #${c.case_id}</span>
                                     <span class="badge ${c.status === 'CLOSED' ? 'badge-closed' : 'badge-open'}">${c.status}</span>
                                 </div>
-                                <div style="font-size: 0.8rem; color: var(--text-secondary);">📂 Category: <code>${c.ticket_type}</code> • Priority: <code>${c.priority}</code></div>
+                                <div style="font-size: 0.8rem; color: var(--text-secondary);">📂 Category: <code>${this.escapeHtml(c.ticket_type)}</code> • Priority: <code>${this.escapeHtml(c.priority)}</code></div>
                             </div>
                         `).join('')}
                     </div>
@@ -1071,12 +1034,42 @@ const App = {
     loginAdmin(e) {
         e.preventDefault();
         const input = document.getElementById('admin-key-input');
-        const key = input ? (input.value.strip ? input.value.strip() : input.value.trim()) : '';
+        const key = input ? input.value.trim() : '';
         if (key) {
             this.adminApiKey = key;
             sessionStorage.setItem('gen_admin_api_key', key);
             this.renderAdminView();
         }
+    },
+
+    showToast(message, type = 'info') {
+        let container = document.getElementById('toast-container');
+        if (!container) {
+            container = document.createElement('div');
+            container.id = 'toast-container';
+            container.style.cssText = 'position: fixed; bottom: 2rem; right: 2rem; z-index: 10000; display: flex; flex-direction: column; gap: 0.5rem; pointer-events: none;';
+            document.body.appendChild(container);
+        }
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${type} glass-panel`;
+        const bgColor = type === 'success' ? 'rgba(0, 240, 255, 0.18)' : (type === 'error' ? 'rgba(255, 0, 85, 0.22)' : 'rgba(255, 255, 255, 0.12)');
+        const borderColor = type === 'success' ? 'var(--accent-cyan)' : (type === 'error' ? 'var(--accent-red)' : 'var(--border-card)');
+        const textColor = type === 'error' ? '#ff4d6d' : (type === 'success' ? '#00f0ff' : '#fff');
+        toast.style.cssText = `padding: 0.9rem 1.35rem; border-radius: var(--radius-sm); background: ${bgColor}; border: 1px solid ${borderColor}; color: ${textColor}; font-weight: 700; font-size: 0.92rem; box-shadow: 0 8px 30px rgba(0,0,0,0.6); backdrop-filter: blur(12px); transition: all 0.3s ease; pointer-events: auto;`;
+        toast.innerHTML = message;
+        container.appendChild(toast);
+        setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(10px)';
+            setTimeout(() => toast.remove(), 300);
+        }, 3500);
+    },
+
+    async refreshAdminData(toastMsg = '') {
+        if (toastMsg) {
+            this.showToast(toastMsg, 'success');
+        }
+        await this.renderAdminView();
     },
 
     logoutAdmin() {
@@ -1105,28 +1098,32 @@ const App = {
                     <div class="stat-box"><div class="stat-val">${stats.completed_matches ?? 0}</div><div class="stat-lbl">Completed Matches</div></div>
                 </div>
 
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">📋 Pending Team Registrations (${pendingRegs.length})</h3>
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: #fff;">📋 Pending Team Registrations (${pendingRegs.length})</h3>
                 <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.5rem;">
                     ${pendingRegs.length === 0 ? `
                         <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
                             <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">✅</div>
                             <h4>No Pending Registrations</h4>
-                            <p style="color: var(--text-muted);">All team registration tickets have been reviewed.</p>
+                            <p style="color: var(--text-muted); margin-top: 0.25rem;">All team registration tickets have been reviewed.</p>
                         </div>
                     ` : pendingRegs.map(r => `
-                        <div class="glass-panel" style="padding: 1.5rem;">
+                        <div class="glass-panel" style="padding: 1.5rem;" id="reg-card-${r.ticket_id}">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
-                                <strong style="font-size: 1.1rem; color: var(--accent-cyan);">${r.team_name || 'Team'}</strong>
+                                <strong style="font-size: 1.15rem; color: var(--accent-cyan);">${this.escapeHtml(r.team_name || 'Team')}</strong>
                                 <span class="badge badge-draft">PENDING</span>
                             </div>
-                            <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 1rem;">
-                                🏆 <strong>Tournament:</strong> ${r.tournament_name || 'N/A'}<br>
-                                👑 <strong>Captain:</strong> ${r.captain_name || 'N/A'} (<span style="color: var(--accent-gold);">${r.captain_phone || ''}</span>)<br>
-                                🆔 <strong>Code:</strong> ${r.registration_code || r.ticket_id}
+                            <div style="font-size: 0.88rem; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.6;">
+                                🏆 <strong>Tournament:</strong> ${this.escapeHtml(r.tournament_name || 'N/A')}<br>
+                                👑 <strong>Captain:</strong> ${this.escapeHtml(r.captain_name || 'N/A')} (<span style="color: var(--accent-gold);">${this.escapeHtml(r.captain_phone || '')}</span>)<br>
+                                🆔 <strong>Registration Code:</strong> <code>${this.escapeHtml(r.registration_code || r.ticket_id)}</code>
                             </div>
                             <div style="display: flex; gap: 0.75rem;">
-                                <button onclick="App.approveTeamAdmin(${r.ticket_id})" class="btn btn-primary" style="flex: 1; padding: 0.5rem;">✅ Approve</button>
-                                <button onclick="App.rejectTeamAdmin(${r.ticket_id})" class="btn btn-danger" style="flex: 1; padding: 0.5rem; background: var(--accent-red); color: #fff;">❌ Reject</button>
+                                <button onclick="App.approveTeamAdmin(${r.ticket_id})" class="btn btn-primary" style="flex: 1; padding: 0.6rem; font-weight: 700;">
+                                    ✓ Approve
+                                </button>
+                                <button onclick="App.showRejectModal(${r.ticket_id})" class="btn btn-danger" style="flex: 1; padding: 0.6rem; background: var(--accent-red); color: #fff; font-weight: 700;">
+                                    ✕ Reject
+                                </button>
                             </div>
                         </div>
                     `).join('')}
@@ -1139,8 +1136,8 @@ const App = {
                     <form onsubmit="App.handleCreateTournament(event)">
                         <div class="form-grid">
                             <div class="form-group"><label>Tournament Name</label><input type="text" id="t-title" class="form-input" placeholder="e.g. GEN Valorant Masters" required></div>
-                            <div class="form-group"><label>Game</label><input type="text" id="t-game" class="form-input" placeholder="VALORANT / PUBG MOBILE / CS2 / League of Legends" required></div>
-                            <div class="form-group"><label>Prize Pool</label><input type="text" id="t-prize" class="form-input" placeholder="$500 USD / 50,000 BDT"></div>
+                            <div class="form-group"><label>Game</label><input type="text" id="t-game" class="form-input" placeholder="VALORANT / PUBG MOBILE / CS2" required></div>
+                            <div class="form-group"><label>Prize Pool</label><input type="text" id="t-prize" class="form-input" placeholder="৳500 BDT / $500 USD"></div>
                             <div class="form-group"><label>Maximum Teams</label><input type="number" id="t-max" class="form-input" value="16" min="2" max="128" required></div>
                             <div class="form-group"><label>Format</label><select id="t-format" class="form-select"><option value="Single Elimination">Single Elimination</option><option value="Double Elimination">Double Elimination</option><option value="Round Robin">Round Robin</option></select></div>
                             <div class="form-group"><label>Initial Status</label><select id="t-status" class="form-select"><option value="REGISTRATION_OPEN">🟢 REGISTRATION OPEN</option><option value="DRAFT">⏸️ DRAFT</option><option value="REGISTRATION_CLOSED">🔴 REGISTRATION CLOSED</option><option value="ONGOING">🔵 ONGOING</option><option value="COMPLETED">🏆 COMPLETED</option></select></div>
@@ -1155,11 +1152,11 @@ const App = {
                     </form>
                 </div>
 
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">🏆 Active Database Tournaments</h3>
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: #fff;">🏆 Active Database Tournaments</h3>
                 <div class="data-table-wrapper glass-panel">
                     <table class="data-table">
                         <thead>
-                            <tr><th>ID</th><th>Name</th><th>Game</th><th>Reg Status</th><th>Main Status</th><th>Teams</th><th>Quick Actions</th></tr>
+                            <tr><th>ID</th><th>Name</th><th>Game</th><th>Reg Status</th><th>Main Status</th><th>Approved Teams</th><th>Quick Actions</th></tr>
                         </thead>
                         <tbody>
                             ${tournaments.map(t => {
@@ -1169,14 +1166,14 @@ const App = {
                                 return `
                                     <tr>
                                         <td>#${t.tournament_id}</td>
-                                        <td><strong>${t.title}</strong></td>
-                                        <td><span style="color: var(--accent-cyan); font-weight: 700;">${t.game_type}</span></td>
+                                        <td><strong>${this.escapeHtml(t.title)}</strong></td>
+                                        <td><span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(t.game_type)}</span></td>
                                         <td><span class="badge ${isFull ? 'badge-closed' : (t.registration_status === 'OPEN' ? 'badge-open' : 'badge-closed')}">${isFull ? 'FULL' : t.registration_status}</span></td>
                                         <td><span class="badge badge-ongoing">${t.status}</span></td>
-                                        <td><strong>${approved} / ${maxT}</strong></td>
-                                        <td style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
-                                            <button onclick="App.handleOpenRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Open Registration">🟢 Open</button>
-                                            <button onclick="App.handleCloseRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" title="Close Registration">🔴 Close</button>
+                                        <td><strong style="color: ${approved >= 2 ? 'var(--accent-green)' : 'var(--text-primary)'};">${approved} / ${maxT} Teams</strong></td>
+                                        <td style="display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center;">
+                                            <button onclick="App.handleOpenRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.3rem 0.5rem; font-size: 0.75rem;" title="Open Registration">🟢 Open</button>
+                                            <button onclick="App.handleCloseRegistration(${t.tournament_id})" class="btn btn-secondary" style="padding: 0.3rem 0.5rem; font-size: 0.75rem;" title="Close Registration">🔴 Close</button>
                                             <select onchange="App.handleSetStatus(${t.tournament_id}, this.value)" class="form-select" style="padding: 0.25rem; font-size: 0.75rem; width: auto;">
                                                 <option value="" disabled selected>Status...</option>
                                                 <option value="DRAFT">DRAFT</option>
@@ -1186,8 +1183,8 @@ const App = {
                                                 <option value="COMPLETED">COMPLETED</option>
                                                 <option value="CANCELLED">CANCELLED</option>
                                             </select>
-                                            <button onclick="App.handleGenerateBracket('${t.tournament_id}')" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">🌳 Bracket</button>
-                                            <button onclick="App.handleCancelTournament(${t.tournament_id})" class="btn btn-danger" style="padding: 0.25rem 0.5rem; font-size: 0.75rem; background: var(--accent-red); color:#fff;">❌ Cancel</button>
+                                            <button onclick="App.handleGenerateBracket('${t.tournament_id}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" title="Generate or Regenerate Bracket">🏆 Bracket</button>
+                                            <button onclick="App.showCancelModal(${t.tournament_id})" class="btn btn-danger" style="padding: 0.3rem 0.5rem; font-size: 0.75rem; background: var(--accent-red); color:#fff;" title="Cancel Tournament">❌ Cancel</button>
                                         </td>
                                     </tr>
                                 `;
@@ -1200,25 +1197,45 @@ const App = {
             const matches = await Api.getMatches();
 
             container.innerHTML = `
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">⚔️ Update Match Scores</h3>
+                <div style="margin-bottom: 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.6rem; color: #fff;">⚔️ Admin Match Manager</h3>
+                        <p style="color: var(--text-secondary); font-size: 0.9rem;">Schedule matches, manage lobbies, enter match scores & advance winners automatically.</p>
+                    </div>
+                </div>
+
                 <div class="data-table-wrapper glass-panel">
                     <table class="data-table">
                         <thead>
-                            <tr><th>Match ID</th><th>Tournament</th><th>Stage</th><th>Team 1</th><th>Team 2</th><th>Score</th><th>Action</th></tr>
+                            <tr><th>Match ID</th><th>Tournament</th><th>Stage</th><th>Teams & Scores</th><th>Schedule & Lobby</th><th>Status</th><th>Actions</th></tr>
                         </thead>
                         <tbody>
                             ${matches.length === 0 ? `
-                                <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 2rem;">No matches scheduled. Generate a bracket first.</td></tr>
+                                <tr><td colspan="7" style="text-align: center; color: var(--text-muted); padding: 3rem;">No matches scheduled yet. Go to Tournament Manager and click 🏆 Bracket to generate matches.</td></tr>
                             ` : matches.map(m => `
                                 <tr>
-                                    <td>#${m.match_id}</td>
-                                    <td>${m.tournament_name || 'N/A'}</td>
-                                    <td>${m.stage_name}</td>
-                                    <td>🛡️ ${m.team1_name || 'TBD'}</td>
-                                    <td>🛡️ ${m.team2_name || 'TBD'}</td>
-                                    <td><strong>${m.team1_score ?? 0} - ${m.team2_score ?? 0}</strong></td>
+                                    <td><strong>#M-${m.match_id}</strong></td>
+                                    <td>${this.escapeHtml(m.tournament_name || 'N/A')}</td>
+                                    <td><span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(m.stage_name || 'Round')}</span></td>
                                     <td>
-                                        <button onclick="App.showScoreInputModal(${m.match_id}, '${m.team1_name || 'Team 1'}', '${m.team2_name || 'Team 2'}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">✏️ Update Score</button>
+                                        <div style="display: flex; align-items: center; gap: 0.5rem;">
+                                            <span>🛡️ <strong>${this.escapeHtml(m.team1_name || 'TBD')}</strong> (${m.team1_score ?? 0})</span>
+                                            <span style="color: var(--text-muted);">vs</span>
+                                            <span>🛡️ <strong>${this.escapeHtml(m.team2_name || 'TBD')}</strong> (${m.team2_score ?? 0})</span>
+                                        </div>
+                                    </td>
+                                    <td style="font-size: 0.8rem; color: var(--text-secondary);">
+                                        📅 ${m.scheduled_time || 'Not Scheduled'}<br>
+                                        🎮 ${this.escapeHtml(m.lobby_info || 'Lobby TBD')}
+                                    </td>
+                                    <td>
+                                        <span class="badge ${m.status === 'COMPLETED' ? 'badge-draft' : 'badge-open'}">${m.status || 'SCHEDULED'}</span>
+                                    </td>
+                                    <td>
+                                        <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+                                            <button onclick="App.showScheduleModal(${m.match_id}, '${this.escapeHtml(m.scheduled_time || '')}', '${this.escapeHtml(m.lobby_info || '')}')" class="btn btn-secondary" style="padding: 0.3rem 0.55rem; font-size: 0.75rem;">📅 Schedule</button>
+                                            <button onclick="App.showScoreInputModal(${m.match_id}, '${this.escapeHtml(m.team1_name || 'Team 1')}', '${this.escapeHtml(m.team2_name || 'Team 2')}', ${m.team1_score ?? 0}, ${m.team2_score ?? 0})" class="btn btn-primary" style="padding: 0.3rem 0.55rem; font-size: 0.75rem;">✏️ Enter Score</button>
+                                        </div>
                                     </td>
                                 </tr>
                             `).join('')}
@@ -1230,7 +1247,7 @@ const App = {
             const logs = await Api.getAuditLogs(this.adminApiKey);
 
             container.innerHTML = `
-                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem;">📜 Admin Action Audit Logs (${logs.length})</h3>
+                <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1rem; color: #fff;">📜 Admin Action Audit Logs (${logs.length})</h3>
                 <div class="data-table-wrapper glass-panel">
                     <table class="data-table">
                         <thead>
@@ -1243,10 +1260,10 @@ const App = {
                                 <tr>
                                     <td>#${l.log_id}</td>
                                     <td style="font-size: 0.8rem; color: var(--text-muted);">${l.timestamp}</td>
-                                    <td><strong style="color: var(--accent-gold);">${l.admin_id}</strong></td>
-                                    <td><span class="badge badge-ongoing">${l.action}</span></td>
+                                    <td><strong style="color: var(--accent-gold);">${this.escapeHtml(l.admin_id)}</strong></td>
+                                    <td><span class="badge badge-ongoing">${this.escapeHtml(l.action)}</span></td>
                                     <td>${l.tournament_name || (l.tournament_id ? `#${l.tournament_id}` : '-')}</td>
-                                    <td style="font-size: 0.85rem; color: var(--text-secondary);">${l.details || '-'}</td>
+                                    <td style="font-size: 0.85rem; color: var(--text-secondary);">${this.escapeHtml(l.details || '-')}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1259,22 +1276,40 @@ const App = {
     async approveTeamAdmin(ticketId) {
         try {
             await Api.approveRegistration(this.adminApiKey, ticketId);
-            alert('Registration approved successfully!');
-            await this.renderAdminView();
+            this.showToast('✅ Registration approved successfully!', 'success');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error approving registration: ' + err.message);
+            this.showToast('✕ Error approving registration: ' + err.message, 'error');
         }
     },
 
-    async rejectTeamAdmin(ticketId) {
-        const reason = prompt('Enter rejection reason:');
-        if (!reason) return;
+    showRejectModal(ticketId) {
+        this.showModal(`
+            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem; color: var(--accent-red);">❌ Reject Team Registration</h3>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.9rem;">Provide a reason for rejecting ticket #${ticketId}:</p>
+            <form onsubmit="App.handleRejectSubmit(event, ${ticketId})">
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label>Rejection Reason</label>
+                    <input type="text" id="reject-reason-input" class="form-input" placeholder="e.g. Invalid payment transaction ID or incorrect team tag" required>
+                </div>
+                <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                    <button type="button" onclick="App.hideModal()" class="btn btn-secondary">Cancel</button>
+                    <button type="submit" class="btn btn-danger" style="background: var(--accent-red); color: #fff;">Confirm Rejection</button>
+                </div>
+            </form>
+        `);
+    },
+
+    async handleRejectSubmit(e, ticketId) {
+        e.preventDefault();
+        const reason = document.getElementById('reject-reason-input').value;
         try {
             await Api.rejectRegistration(this.adminApiKey, ticketId, reason);
-            alert('Registration rejected successfully!');
-            await this.renderAdminView();
+            this.hideModal();
+            this.showToast('Registration rejected.', 'info');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error rejecting registration: ' + err.message);
+            this.showToast('✕ Error rejecting registration: ' + err.message, 'error');
         }
     },
 
@@ -1301,30 +1336,30 @@ const App = {
                 registration_status, registration_start, registration_deadline,
                 tournament_start, tournament_end, description, rules_text
             });
-            alert('Tournament created! If status is OPEN, it is now live in Discord registration.');
-            await this.renderAdminView();
+            this.showToast('🏆 Tournament created successfully!', 'success');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Failed to create tournament: ' + err.message);
+            this.showToast('✕ Failed to create tournament: ' + err.message, 'error');
         }
     },
 
     async handleOpenRegistration(id) {
         try {
             await Api.openRegistration(this.adminApiKey, id);
-            alert('Registration opened! Tournament is now active in Discord dropdown.');
-            await this.renderAdminView();
+            this.showToast('🟢 Registration opened!', 'success');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error opening registration: ' + err.message);
+            this.showToast('✕ Error opening registration: ' + err.message, 'error');
         }
     },
 
     async handleCloseRegistration(id) {
         try {
             await Api.closeRegistration(this.adminApiKey, id);
-            alert('Registration closed.');
-            await this.renderAdminView();
+            this.showToast('🔴 Registration closed.', 'info');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error closing registration: ' + err.message);
+            this.showToast('✕ Error closing registration: ' + err.message, 'error');
         }
     },
 
@@ -1332,50 +1367,119 @@ const App = {
         if (!newStatus) return;
         try {
             await Api.setTournamentStatus(this.adminApiKey, id, newStatus);
-            alert(`Tournament status updated to ${newStatus}.`);
-            await this.renderAdminView();
+            this.showToast(`Tournament status updated to ${newStatus}.`, 'success');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error changing status: ' + err.message);
+            this.showToast('✕ Error changing status: ' + err.message, 'error');
         }
     },
 
-    async handleCancelTournament(id) {
-        if (!confirm('Are you sure you want to cancel this tournament?')) return;
+    showCancelModal(id) {
+        this.showModal(`
+            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem; color: var(--accent-red);">⚠️ Cancel Tournament</h3>
+            <p style="color: var(--text-secondary); margin-bottom: 1.5rem;">Are you sure you want to cancel this tournament? Status will update to CANCELLED.</p>
+            <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                <button type="button" onclick="App.hideModal()" class="btn btn-secondary">Keep Active</button>
+                <button type="button" onclick="App.executeCancelTournament(${id})" class="btn btn-danger" style="background: var(--accent-red); color: #fff;">Yes, Cancel Tournament</button>
+            </div>
+        `);
+    },
+
+    async executeCancelTournament(id) {
         try {
             await Api.cancelTournament(this.adminApiKey, id);
-            alert('Tournament cancelled.');
-            await this.renderAdminView();
+            this.hideModal();
+            this.showToast('Tournament cancelled.', 'info');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error cancelling tournament: ' + err.message);
+            this.showToast('✕ Error cancelling tournament: ' + err.message, 'error');
         }
     },
 
     async handleGenerateBracket(id) {
         try {
             await Api.generateBracket(this.adminApiKey, id);
-            alert('Tournament bracket generated successfully!');
-            await this.renderAdminView();
+            this.showToast('🏆 Tournament bracket generated successfully!', 'success');
+            this.adminTab = 'matches';
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error generating bracket: ' + err.message);
+            this.showToast('✕ Error generating bracket: ' + err.message, 'error');
         }
     },
 
-    showScoreInputModal(matchId, t1Name, t2Name) {
+    showScheduleModal(matchId, currentScheduled = '', currentLobby = '') {
         this.showModal(`
-            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem;">✏️ Enter Match Score</h3>
-            <form onsubmit="App.handleSaveMatchScore(event, ${matchId})">
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem;">📅 Schedule Match & Lobby Info</h3>
+            <form onsubmit="App.handleSaveSchedule(event, ${matchId})">
+                <div class="form-grid" style="margin-bottom: 1rem;">
                     <div class="form-group">
-                        <label>${t1Name} Score</label>
-                        <input type="number" id="m-score1" class="form-input" value="0" min="0" required>
+                        <label>Scheduled Time (Asia/Dhaka)</label>
+                        <input type="text" id="m-schedule-time" class="form-input" placeholder="e.g. 15 Aug 2026, 8:00 PM (Asia/Dhaka)" value="${currentScheduled}">
                     </div>
                     <div class="form-group">
-                        <label>${t2Name} Score</label>
-                        <input type="number" id="m-score2" class="form-input" value="0" min="0" required>
+                        <label>Map / Mode</label>
+                        <input type="text" id="m-map" class="form-input" placeholder="e.g. Haven / Ascent / Erangel">
+                    </div>
+                    <div class="form-group">
+                        <label>Lobby Name / ID</label>
+                        <input type="text" id="m-lobby-name" class="form-input" placeholder="e.g. GEN-MATCH-${matchId}" value="${currentLobby}">
+                    </div>
+                    <div class="form-group">
+                        <label>Lobby Password / Passcode</label>
+                        <input type="text" id="m-lobby-pass" class="form-input" placeholder="e.g. 1234">
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width: 100%;">💾 Save Match Result</button>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem;">💾 Save Schedule & Lobby Info</button>
             </form>
+        `);
+    },
+
+    async handleSaveSchedule(e, matchId) {
+        e.preventDefault();
+        const scheduled_at = document.getElementById('m-schedule-time').value;
+        const map_name = document.getElementById('m-map').value;
+        const lobby_name = document.getElementById('m-lobby-name').value;
+        const lobby_password = document.getElementById('m-lobby-pass').value;
+
+        try {
+            await Api.scheduleMatch(this.adminApiKey, matchId, {
+                scheduled_at,
+                map: map_name,
+                lobby_name,
+                lobby_password
+            });
+            this.hideModal();
+            this.showToast('📅 Match schedule & lobby details updated!', 'success');
+            await this.refreshAdminData();
+        } catch (err) {
+            this.showToast('✕ Failed to schedule match: ' + err.message, 'error');
+        }
+    },
+
+    showScoreInputModal(matchId, t1Name, t2Name, currentScore1 = 0, currentScore2 = 0) {
+        this.showModal(`
+            <div style="max-width: 500px; margin: 0 auto;">
+                <h3 style="font-family: var(--font-heading); font-size: 1.6rem; margin-bottom: 0.5rem; text-align: center; color: #fff;">⚔️ ENTER MATCH RESULT</h3>
+                <p style="color: var(--text-secondary); font-size: 0.9rem; text-align: center; margin-bottom: 1.5rem;">
+                    Match #${matchId} • Submit scores to determine winner & auto-advance bracket.
+                </p>
+                <form onsubmit="App.handleSaveMatchScore(event, ${matchId})">
+                    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--border-card); padding: 1.5rem; border-radius: var(--radius-md); margin-bottom: 1.5rem;">
+                        <div style="text-align: center;">
+                            <div style="font-weight: 800; font-size: 1.1rem; color: var(--accent-cyan); margin-bottom: 0.5rem;">${this.escapeHtml(t1Name)}</div>
+                            <input type="number" id="m-score1" class="form-input" value="${currentScore1}" min="0" style="text-align: center; font-weight: 800; font-size: 1.4rem;" required>
+                        </div>
+                        <div style="font-size: 1.5rem; font-weight: 800; color: var(--text-muted);">VS</div>
+                        <div style="text-align: center;">
+                            <div style="font-weight: 800; font-size: 1.1rem; color: var(--accent-gold); margin-bottom: 0.5rem;">${this.escapeHtml(t2Name)}</div>
+                            <input type="number" id="m-score2" class="form-input" value="${currentScore2}" min="0" style="text-align: center; font-weight: 800; font-size: 1.4rem;" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-size: 1rem; font-weight: 700;">
+                        🏆 SUBMIT RESULT & ADVANCE WINNER
+                    </button>
+                </form>
+            </div>
         `);
     },
 
@@ -1391,10 +1495,10 @@ const App = {
                 status: 'COMPLETED'
             });
             this.hideModal();
-            alert('Match score recorded and winner advanced!');
-            await this.renderAdminView();
+            this.showToast('🏆 Match score recorded & winner advanced in bracket!', 'success');
+            await this.refreshAdminData();
         } catch (err) {
-            alert('Error recording score: ' + err.message);
+            this.showToast('✕ Error recording match score: ' + err.message, 'error');
         }
     }
 };
