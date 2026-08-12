@@ -786,6 +786,7 @@ def _init_db_sync():
                     ('gen-pubg-mobile-championship', 'GEN PUBG Mobile Championship', 'PUBG MOBILE', 'REGISTRATION_OPEN', 'OPEN', 16, '$300 USD', 'Official GEN Esports PUBG Mobile Championship.', 'GEN Esports PUBG Mobile Championship Rules.');
                 """)
             cursor.execute("UPDATE tournaments SET registration_status = 'OPEN' WHERE registration_status IS NULL OR registration_status = '';")
+            cursor.execute("UPDATE tournaments SET prize_info = '৳500 BDT' WHERE slug = 'gen-valorant-championship' AND (prize_info = '$500 USD' OR prize_info IS NULL OR prize_info = '');")
 
         conn.commit()
 

@@ -324,11 +324,33 @@ const App = {
         `;
     },
 
+    handleImgError(img, type = 'team') {
+        if (img) {
+            img.onerror = null;
+            img.src = type === 'team' ? TEAM_PLACEHOLDER_LOGO : PLAYER_PLACEHOLDER_AVATAR;
+        }
+    },
+
+    escapeHtml(str) {
+        if (!str) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    },
+
     buildTournamentCardHtml(t) {
         const approved = t.current_approved_team_count || 0;
         const maxTeams = t.max_teams || 16;
         const isFull = approved >= maxTeams || t.registration_status === 'FULL';
         const progressPct = Math.min(100, Math.round((approved / maxTeams) * 100));
+
+        let prizePool = t.prize_info || '৳500 BDT';
+        if (prizePool.includes('$500 USD')) {
+            prizePool = prizePool.replace('$500 USD', '৳500 BDT');
+        }
 
         let statusBadge = `<span class="badge badge-open">🟢 REGISTRATION OPEN</span>`;
         if (isFull) {
@@ -345,18 +367,18 @@ const App = {
             <div class="tournament-card glass-panel">
                 <div class="tournament-card-header">
                     <div>
-                        <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase;">${t.game_type || 'ESPORTS'}</div>
-                        <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-top: 0.2rem;">${t.title}</h3>
+                        <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase;">${this.escapeHtml(t.game_type || 'ESPORTS')}</div>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-top: 0.2rem;">${this.escapeHtml(t.title)}</h3>
                     </div>
                     ${statusBadge}
                 </div>
                 <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 1.5rem; line-height: 1.5;">
-                    ${t.description || 'GEN Esports Official Championship Tournament Series.'}
+                    ${this.escapeHtml(t.description || 'GEN Esports Official Championship Tournament Series.')}
                 </p>
 
                 <div style="background: rgba(255,255,255,0.03); border-radius: var(--radius-sm); padding: 1rem; margin-bottom: 1.5rem; display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.85rem;">
-                    <div>💰 <strong>Prize Pool:</strong><br><span style="color: var(--accent-gold); font-weight: 700;">${t.prize_info || '$500 USD'}</span></div>
-                    <div>⚔️ <strong>Format:</strong><br><span style="color: var(--text-primary); font-weight: 600;">${t.format || 'Single Elimination'}</span></div>
+                    <div>💰 <strong>Prize Pool:</strong><br><span style="color: var(--accent-gold); font-weight: 700;">${this.escapeHtml(prizePool)}</span></div>
+                    <div>⚔️ <strong>Format:</strong><br><span style="color: var(--text-primary); font-weight: 600;">${this.escapeHtml(t.format || 'Single Elimination')}</span></div>
                 </div>
 
                 <div style="margin-bottom: 1.5rem;">
@@ -370,7 +392,7 @@ const App = {
                 </div>
 
                 <div style="display: flex; gap: 0.75rem;">
-                    <button onclick="App.showTournamentDetailsModal('${t.slug}')" class="btn btn-secondary" style="flex: 1; font-size: 0.85rem;">
+                    <button onclick="App.showTournamentDetailsModal('${this.escapeHtml(t.slug)}')" class="btn btn-secondary" style="flex: 1; font-size: 0.85rem;">
                         ℹ️ Details & Teams
                     </button>
                     ${isFull ? `
@@ -396,52 +418,79 @@ const App = {
         const maxTeams = t.max_teams || 16;
         const isFull = approved >= maxTeams || t.registration_status === 'FULL';
 
+        let prizePool = t.prize_info || '৳500 BDT';
+        if (prizePool.includes('$500 USD')) {
+            prizePool = prizePool.replace('$500 USD', '৳500 BDT');
+        }
+
         const teamsListHtml = approvedTeams.length === 0 ? `
-            <div style="text-align: center; color: var(--text-muted); padding: 1.5rem;">
-                No approved teams registered yet for this tournament.
+            <div style="text-align: center; color: var(--text-muted); padding: 2rem; background: rgba(0,0,0,0.2); border-radius: var(--radius-md); border: 1px dashed var(--border-card);">
+                🛡️ No approved teams registered yet for this tournament.
             </div>
         ` : `
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; max-height: 250px; overflow-y: auto;">
-                ${approvedTeams.map(tm => `
-                    <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 0.75rem; display: flex; align-items: center; gap: 0.75rem;">
-                        <img src="${tm.team_logo_url || TEAM_PLACEHOLDER_LOGO}" style="width: 36px; height: 36px; border-radius: 6px; object-fit: cover;" onerror="this.src=TEAM_PLACEHOLDER_LOGO">
-                        <div>
-                            <div style="font-weight: 700; font-size: 0.9rem;">${tm.team_name}</div>
-                            <div style="font-size: 0.75rem; color: var(--text-muted);">👑 ${tm.captain_name}</div>
+            <div style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 280px; overflow-y: auto; padding-right: 0.25rem;">
+                ${approvedTeams.map(tm => {
+                    const logoUrl = tm.team_logo_url ? (tm.team_logo_url.startsWith('http') ? tm.team_logo_url : '/' + tm.team_logo_url) : TEAM_PLACEHOLDER_LOGO;
+                    const publicId = tm.public_id || tm.registration_id || 'GEN-TEAM-XXXX';
+                    return `
+                        <div style="background: rgba(255,255,255,0.03); border: 1px solid var(--border-card); border-radius: var(--radius-md); padding: 0.85rem 1.1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 1rem;">
+                                <img src="${logoUrl}"
+                                     style="width: 44px; height: 44px; border-radius: 10px; object-fit: cover; background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1);"
+                                     onerror="App.handleImgError(this, 'team')">
+                                <div>
+                                    <div style="font-weight: 800; font-size: 1.02rem; color: #fff; display: flex; align-items: center; gap: 0.4rem;">
+                                        ${this.escapeHtml(tm.team_name)}
+                                        <span style="color: var(--accent-green); font-size: 0.85rem;" title="Verified Team">✓</span>
+                                    </div>
+                                    <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 600; margin-top: 0.15rem;">
+                                        Team ID: <code>${this.escapeHtml(publicId)}</code>
+                                    </div>
+                                    <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem;">
+                                        👑 Captain: <strong>${this.escapeHtml(tm.captain_name || 'Team Captain')}</strong>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="text-align: right;">
+                                <span class="badge badge-open" style="font-size: 0.75rem; padding: 0.25rem 0.6rem;">VERIFIED ✓</span>
+                            </div>
                         </div>
-                    </div>
-                `).join('')}
+                    `;
+                }).join('')}
             </div>
         `;
 
         this.showModal(`
-            <div>
-                <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 700; text-transform: uppercase;">${t.game_type || 'ESPORTS'}</div>
-                <h2 style="font-family: var(--font-heading); font-size: 2rem; margin-top: 0.25rem;">${t.title}</h2>
-                <p style="color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.5;">${t.description || ''}</p>
+            <div style="max-width: 650px; margin: 0 auto;">
+                <div style="font-size: 0.8rem; color: var(--accent-cyan); font-weight: 800; text-transform: uppercase; letter-spacing: 1px;">${this.escapeHtml(t.game_type || 'ESPORTS')}</div>
+                <h2 style="font-family: var(--font-heading); font-size: 2.2rem; margin-top: 0.25rem; color: #fff;">${this.escapeHtml(t.title)}</h2>
+                <p style="color: var(--text-secondary); margin-top: 0.5rem; line-height: 1.6; font-size: 0.95rem;">${this.escapeHtml(t.description || '')}</p>
 
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 1rem; margin: 1.5rem 0; background: rgba(255,255,255,0.03); padding: 1rem; border-radius: var(--radius-md);">
-                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">PRIZE POOL</span><br><strong style="color: var(--accent-gold);">${t.prize_info || '$500 USD'}</strong></div>
-                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">FORMAT</span><br><strong>${t.format || 'Single Elimination'}</strong></div>
-                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">MAX TEAMS</span><br><strong>${maxTeams} Teams</strong></div>
-                    <div><span style="color: var(--text-muted); font-size: 0.8rem;">APPROVED</span><br><strong style="color: ${isFull ? 'var(--accent-red)' : 'var(--accent-green)'};">${approved} / ${maxTeams} ${isFull ? '(FULL)' : ''}</strong></div>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 1rem; margin: 1.5rem 0; background: rgba(0,0,0,0.4); border: 1px solid var(--border-card); padding: 1.25rem; border-radius: var(--radius-md);">
+                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">PRIZE POOL</span><br><strong style="color: var(--accent-gold); font-size: 1.1rem;">${this.escapeHtml(prizePool)}</strong></div>
+                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">FORMAT</span><br><strong style="font-size: 1rem;">${this.escapeHtml(t.format || 'Single Elimination')}</strong></div>
+                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">MAX TEAMS</span><br><strong style="font-size: 1rem;">${maxTeams} Teams</strong></div>
+                    <div><span style="color: var(--text-muted); font-size: 0.78rem; font-weight: 700;">APPROVED TEAMS</span><br><strong style="color: ${isFull ? 'var(--accent-red)' : 'var(--accent-cyan)'}; font-size: 1rem;">${approved} / ${maxTeams} ${isFull ? '(FULL)' : ''}</strong></div>
                 </div>
 
-                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">📜 Tournament Rules</h4>
-                <div style="background: rgba(0,0,0,0.4); border: 1px solid var(--border-card); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.88rem; max-height: 120px; overflow-y: auto; color: var(--text-secondary); margin-bottom: 1.5rem;">
-                    ${t.rules_text || 'Official GEN Esports Rules apply.'}
+                <h4 style="font-family: var(--font-heading); font-size: 1.15rem; margin-bottom: 0.75rem; color: #fff;">📜 Tournament Rules</h4>
+                <div style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-card); padding: 1rem; border-radius: var(--radius-sm); font-size: 0.9rem; max-height: 130px; overflow-y: auto; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.6;">
+                    ${this.escapeHtml(t.rules_text || 'Official GEN Esports Rules apply.')}
                 </div>
 
-                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem;">🛡️ Registered Teams (${approvedTeams.length})</h4>
+                <h4 style="font-family: var(--font-heading); font-size: 1.15rem; margin-bottom: 0.85rem; color: #fff; display: flex; align-items: center; justify-content: space-between;">
+                    <span>🛡️ Registered Teams (${approvedTeams.length})</span>
+                    <span style="font-size: 0.8rem; color: var(--text-muted); font-weight: 500;">Approved Roster Profiles</span>
+                </h4>
                 ${teamsListHtml}
 
                 <div style="margin-top: 2rem; display: flex; justify-content: flex-end; gap: 1rem;">
                     ${isFull ? `
-                        <button disabled class="btn btn-secondary" style="width: 100%; opacity: 0.6; cursor: not-allowed;">
+                        <button disabled class="btn btn-secondary" style="width: 100%; opacity: 0.6; cursor: not-allowed; padding: 0.85rem;">
                             🛑 Registration Full
                         </button>
                     ` : `
-                        <button onclick="App.openDiscordInvite()" class="btn btn-discord" style="width: 100%;">
+                        <button onclick="App.openDiscordInvite()" class="btn btn-discord" style="width: 100%; padding: 0.85rem; font-size: 1rem;">
                             💬 Register Team on Discord
                         </button>
                     `}
