@@ -419,6 +419,90 @@ const Api = {
             console.error(`Failed to fetch veto state for match ${matchId}:`, err);
             return null;
         }
+    },
+
+    /**
+     * Fetch live spectator hub matches
+     */
+    async getLiveMatches() {
+        try {
+            const res = await fetch(`${API_BASE}/public/live`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch live spectator matches:', err);
+            return [];
+        }
+    },
+
+    /**
+     * Fetch competitive leaderboard
+     */
+    async getLeaderboard(game = 'VALORANT') {
+        try {
+            const res = await fetch(`${API_BASE}/public/leaderboard?game=${encodeURIComponent(game)}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch leaderboard:', err);
+            return { teams: [], players: [] };
+        }
+    },
+
+    /**
+     * Fetch competitive seasons list
+     */
+    async getSeasons() {
+        try {
+            const res = await fetch(`${API_BASE}/public/seasons`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch seasons:', err);
+            return [];
+        }
+    },
+
+    /**
+     * Fetch tournament economy & prize pool
+     */
+    async getTournamentEconomy(tournamentId) {
+        try {
+            const res = await fetch(`${API_BASE}/public/tournaments/${tournamentId}/economy`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Failed to fetch economy for tournament ${tournamentId}:`, err);
+            return null;
+        }
+    },
+
+    /**
+     * Global platform search
+     */
+    async globalSearch(query) {
+        try {
+            const res = await fetch(`${API_BASE}/public/search?q=${encodeURIComponent(query)}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Global search failed for '${query}':`, err);
+            return { players: [], teams: [], tournaments: [], matches: [] };
+        }
+    },
+
+    /**
+     * Fetch user notifications
+     */
+    async getUserNotifications(userId) {
+        try {
+            const res = await fetch(`${API_BASE}/public/user/notifications?user_id=${encodeURIComponent(userId)}`);
+            if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+            return await res.json();
+        } catch (err) {
+            console.error(`Failed to fetch notifications for ${userId}:`, err);
+            return [];
+        }
     }
 };
 

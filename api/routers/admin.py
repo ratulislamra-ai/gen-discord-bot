@@ -28,6 +28,79 @@ from database.db import (
 
 router = APIRouter(prefix="/api/admin", tags=["Admin Dashboard Endpoints"], dependencies=[Depends(verify_api_key)])
 
+@router.post("/tournaments/{tournament_id}/format", summary="Generate Double Elimination or Swiss Format")
+async def generate_format_api(tournament_id: int, payload: Dict[str, Any]):
+    """Generate Double Elimination, Swiss System, or Single Elimination brackets."""
+    from database.db import generate_double_elimination_bracket, generate_swiss_round, generate_tournament_bracket
+    fmt = payload.get("format", "Single Elimination").strip()
+    round_num = payload.get("round_number", 1)
+
+    if fmt == "Double Elimination":
+        matches = await generate_double_elimination_bracket(tournament_id)
+    elif fmt == "Swiss":
+        matches = await generate_swiss_round(tournament_id, int(round_num))
+    else:
+        matches = await generate_tournament_bracket(str(tournament_id))
+
+    await log_admin_action("API_ADMIN", "GENERATE_FORMAT", details=f"Generated {fmt} format for tournament #{tournament_id}")
+    return {"message": f"Generated {fmt} format successfully.", "matches": matches}
+
+@router.get("/system-health", summary="Get Detailed System Observability & Health Metrics")
+async def get_admin_system_health_api():
+    """Return admin observability status and health metrics."""
+    from database.db import get_system_health_metrics
+    health = await get_system_health_metrics()
+    return health
+
+@router.post("/transactions", summary="Record Financial Transaction")
+async def record_transaction_api(payload: Dict[str, Any]):
+    """Record financial ledger transaction (ENTRY_FEE, PRIZE, REFUND, ADJUSTMENT)."""
+    from database.db import record_financial_transaction
+    entity_type = payload.get("entity_type", "TEAM")
+    entity_id = payload.get("entity_id", 0)
+    tournament_id = payload.get("tournament_id")
+    amount = float(payload.get("amount", 0.0))
+    currency = payload.get("currency", "USD")
+    tx_type = payload.get("tx_type", "ENTRY_FEE")
+    status_val = payload.get("status", "PAID")
+    admin_id = payload.get("admin_id", "API_ADMIN")
+    reason = payload.get("reason", "Financial ledger entry")
+
+    tx = await record_financial_transaction(entity_type, int(entity_id), tournament_id, amount, currency, tx_type, status_val, "INTERNAL", "", str(admin_id), reason)
+    await log_admin_action("API_ADMIN", "RECORD_TRANSACTION", details=f"Recorded {tx_type} {currency} {amount} for {entity_type} #{entity_id}")
+    return {"message": "Transaction recorded cleanly in audit ledger.", "transaction": tx}
+
+@router.post("/seasons", summary="Create Competitive Season")
+async def create_season_api(payload: Dict[str, Any]):
+    """Create a new competitive season."""
+    from database.db import create_season
+    title = payload.get("title")
+    slug = payload.get("slug")
+    start_date = payload.get("start_date")
+    end_date = payload.get("end_date")
+
+    if not title or not slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="title and slug are required.")
+
+    season = await create_season(title, slug, start_date, end_date)
+    await log_admin_action("API_ADMIN", "CREATE_SEASON", details=f"Created competitive season '{title}'")
+    return {"message": "Competitive season created.", "season": season}
+
+@router.post("/staff/assign", summary="Assign Staff Role (Caster, Referee, Moderator)")
+async def assign_staff_role_api(payload: Dict[str, Any]):
+    """Assign Caster, Referee, Moderator or Admin role to a user."""
+    from database.db import assign_staff_role
+    user_id = payload.get("user_id")
+    role_type = payload.get("role_type", "CASTER")
+    tournament_id = payload.get("tournament_id")
+
+    if not user_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="user_id is required.")
+
+    res = await assign_staff_role(str(user_id), str(role_type), tournament_id)
+    await log_admin_action("API_ADMIN", "ASSIGN_STAFF_ROLE", details=f"Assigned {role_type} to user {user_id}")
+    return {"message": f"Staff role {role_type} assigned to {user_id}.", "role": res}
+
 @router.post("/tournaments/{tournament_id}/seeds", summary="Generate or Lock Tournament Seeds")
 async def generate_seeds_api(tournament_id: int, payload: Dict[str, Any]):
     """Generate team seeds (RANDOM, ELO) or lock seeds."""

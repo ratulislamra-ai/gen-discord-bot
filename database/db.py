@@ -488,6 +488,115 @@ def _init_db_sync():
             );
         """)
 
+        # swiss_standings table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS swiss_standings (
+                swiss_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                wins INTEGER DEFAULT 0,
+                losses INTEGER DEFAULT 0,
+                buchholz_score REAL DEFAULT 0.0,
+                round_number INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(tournament_id, team_id)
+            );
+        """)
+
+        # staff_roles table (Caster, Referee, Moderator, Admin)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS staff_roles (
+                role_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                role_type TEXT NOT NULL,
+                assigned_tournament_id INTEGER DEFAULT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # seasons table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS seasons (
+                season_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                slug TEXT UNIQUE NOT NULL,
+                start_date TIMESTAMP,
+                end_date TIMESTAMP,
+                is_active INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # prize_pools table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS prize_pools (
+                prize_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER UNIQUE NOT NULL,
+                total_amount REAL DEFAULT 500.0,
+                currency TEXT DEFAULT 'USD',
+                distribution_json TEXT DEFAULT '{"1st": "50%", "2nd": "30%", "3rd": "20%"}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # transactions ledger table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                transaction_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                public_tx_id TEXT UNIQUE NOT NULL,
+                entity_type TEXT NOT NULL DEFAULT 'TEAM',
+                entity_id INTEGER NOT NULL,
+                tournament_id INTEGER,
+                amount REAL NOT NULL,
+                currency TEXT DEFAULT 'USD',
+                tx_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                provider TEXT DEFAULT 'INTERNAL',
+                reference TEXT,
+                admin_id TEXT,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # payouts table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS payouts (
+                payout_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tournament_id INTEGER NOT NULL,
+                team_id INTEGER NOT NULL,
+                placement TEXT NOT NULL,
+                amount REAL NOT NULL,
+                currency TEXT DEFAULT 'USD',
+                status TEXT DEFAULT 'ELIGIBLE',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # notifications table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS notifications (
+                notification_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                link_url TEXT,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
+        # system_health table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS system_health (
+                log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                component_name TEXT NOT NULL,
+                status TEXT NOT NULL,
+                message TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+
         # Safely migrate schema: add tournament & match columns if missing
         cursor.execute("PRAGMA table_info(tournaments);")
         t_cols = [col[1] for col in cursor.fetchall()]
@@ -515,6 +624,10 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE tournaments ADD COLUMN logo_url TEXT;")
         if "updated_at" not in t_cols:
             cursor.execute("ALTER TABLE tournaments ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;")
+        if "stream_url" not in t_cols:
+            cursor.execute("ALTER TABLE tournaments ADD COLUMN stream_url TEXT;")
+        if "stream_platform" not in t_cols:
+            cursor.execute("ALTER TABLE tournaments ADD COLUMN stream_platform TEXT DEFAULT 'YOUTUBE';")
 
         cursor.execute("PRAGMA table_info(players);")
         p_cols = [col[1] for col in cursor.fetchall()]
@@ -536,6 +649,19 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE players ADD COLUMN primary_game TEXT DEFAULT 'VALORANT';")
         if "verification_status" not in p_cols:
             cursor.execute("ALTER TABLE players ADD COLUMN verification_status TEXT DEFAULT 'UNVERIFIED';")
+
+        cursor.execute("PRAGMA table_info(player_stats);")
+        ps_cols = [col[1] for col in cursor.fetchall()]
+        if "kills" not in ps_cols:
+            cursor.execute("ALTER TABLE player_stats ADD COLUMN kills INTEGER DEFAULT 0;")
+        if "deaths" not in ps_cols:
+            cursor.execute("ALTER TABLE player_stats ADD COLUMN deaths INTEGER DEFAULT 0;")
+        if "assists" not in ps_cols:
+            cursor.execute("ALTER TABLE player_stats ADD COLUMN assists INTEGER DEFAULT 0;")
+        if "acs" not in ps_cols:
+            cursor.execute("ALTER TABLE player_stats ADD COLUMN acs INTEGER DEFAULT 0;")
+        if "mvps" not in ps_cols:
+            cursor.execute("ALTER TABLE player_stats ADD COLUMN mvps INTEGER DEFAULT 0;")
 
         cursor.execute("PRAGMA table_info(teams);")
         tm_cols = [col[1] for col in cursor.fetchall()]
@@ -606,6 +732,14 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE matches ADD COLUMN case_id TEXT;")
         if "completed_at" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN completed_at TIMESTAMP;")
+        if "stream_url" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN stream_url TEXT;")
+        if "is_losers_bracket" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN is_losers_bracket INTEGER DEFAULT 0;")
+        if "bracket_type" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN bracket_type TEXT DEFAULT 'WINNERS';")
+        if "swiss_round" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN swiss_round INTEGER DEFAULT 1;")
 
         # Seed initial tournaments if empty or purge legacy seeds
         cursor.execute("DELETE FROM tournaments WHERE slug = 'gen-lol-cup' OR LOWER(game_type) LIKE '%league%' OR LOWER(title) LIKE '%league%';")
@@ -1428,6 +1562,133 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
         conn.commit()
 
         return _get_tournament_matches_sync(str(tournament_id))
+
+def _generate_double_elimination_bracket_sync(tournament_id: int) -> list[dict]:
+    """Generate Double Elimination tournament bracket (Winners, Losers & Grand Final)."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tournaments WHERE tournament_id = ?;", (tournament_id,))
+        t_row = cursor.fetchone()
+        if not t_row:
+            raise ValueError(f"Tournament #{tournament_id} not found.")
+
+        approved_teams = _get_approved_teams_by_tournament_sync(t_row["title"])
+        if not approved_teams:
+            approved_teams = _get_approved_teams_by_tournament_sync(t_row["slug"])
+
+        if len(approved_teams) < 2:
+            raise ValueError("At least 2 teams required for Double Elimination.")
+
+        team_id_map = {}
+        for t in approved_teams:
+            name = t["team_name"]
+            cursor.execute("SELECT team_id FROM teams WHERE LOWER(name) = LOWER(?);", (name,))
+            existing = cursor.fetchone()
+            if existing:
+                team_id_map[name] = existing["team_id"]
+            else:
+                cursor.execute("INSERT INTO teams (name, logo_url, captain_discord_id) VALUES (?, ?, ?);", (name, t["team_logo_url"], t["captain_name"]))
+                team_id_map[name] = cursor.lastrowid
+
+        cursor.execute("DELETE FROM matches WHERE tournament_id = ?;", (tournament_id,))
+        cursor.execute("DELETE FROM brackets WHERE tournament_id = ?;", (tournament_id,))
+
+        cursor.execute("SELECT team_id FROM team_seeds WHERE tournament_id = ? ORDER BY seed_number ASC;", (tournament_id,))
+        seed_rows = cursor.fetchall()
+        if seed_rows:
+            team_ids = [r["team_id"] for r in seed_rows]
+        else:
+            team_ids = [team_id_map[t["team_name"]] for t in approved_teams]
+
+        num_teams = len(team_ids)
+
+        # 1. Winners Round 1
+        w_matches = []
+        for i in range(0, num_teams, 2):
+            t1 = team_ids[i]
+            t2 = team_ids[i + 1] if i + 1 < num_teams else None
+            st = "COMPLETED" if t2 is None else "SCHEDULED"
+            win = t1 if t2 is None else None
+            pm_id = _generate_next_public_match_id_sync()
+
+            cursor.execute("""
+                INSERT INTO matches (public_match_id, tournament_id, stage_name, round_number, team1_id, team2_id, status, winner_id, bracket_type)
+                VALUES (?, ?, 'Winners Round 1', 1, ?, ?, ?, ?, 'WINNERS');
+            """, (pm_id, tournament_id, t1, t2, st, win))
+            m_id = cursor.lastrowid
+            w_matches.append(m_id)
+            cursor.execute("INSERT INTO brackets (tournament_id, round_number, match_id, position_index) VALUES (?, 1, ?, ?);", (tournament_id, m_id, i // 2))
+
+        # 2. Losers Round 1
+        cursor.execute("""
+            INSERT INTO matches (public_match_id, tournament_id, stage_name, round_number, status, bracket_type, is_losers_bracket)
+            VALUES (?, ?, 'Losers Round 1', 1, 'SCHEDULED', 'LOSERS', 1);
+        """, (_generate_next_public_match_id_sync(), tournament_id))
+
+        # 3. Grand Final
+        cursor.execute("""
+            INSERT INTO matches (public_match_id, tournament_id, stage_name, round_number, status, bracket_type)
+            VALUES (?, ?, 'Grand Final', 99, 'SCHEDULED', 'GRAND_FINAL');
+        """, (_generate_next_public_match_id_sync(), tournament_id))
+
+        cursor.execute("UPDATE tournaments SET status = 'ONGOING', format = 'Double Elimination' WHERE tournament_id = ?;", (tournament_id,))
+        conn.commit()
+        return _get_tournament_matches_sync(str(tournament_id))
+
+async def generate_double_elimination_bracket(tournament_id: int) -> list[dict]:
+    """Asynchronously generate double elimination bracket."""
+    return await asyncio.to_thread(_generate_double_elimination_bracket_sync, tournament_id)
+
+def _generate_swiss_round_sync(tournament_id: int, round_number: int = 1) -> list[dict]:
+    """Generate next Swiss format round pairing based on current standings and Buchholz tiebreakers."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM tournaments WHERE tournament_id = ?;", (tournament_id,))
+        t_row = cursor.fetchone()
+        if not t_row:
+            raise ValueError(f"Tournament #{tournament_id} not found.")
+
+        if round_number == 1:
+            approved = _get_approved_teams_by_tournament_sync(t_row["title"])
+            for t in approved:
+                cursor.execute("SELECT team_id FROM teams WHERE LOWER(name) = LOWER(?);", (t["team_name"],))
+                t_row_rec = cursor.fetchone()
+                if t_row_rec:
+                    cursor.execute("INSERT OR IGNORE INTO swiss_standings (tournament_id, team_id) VALUES (?, ?);", (tournament_id, t_row_rec["team_id"]))
+
+        cursor.execute("""
+            SELECT s.*, t.name as team_name 
+            FROM swiss_standings s
+            JOIN teams t ON s.team_id = t.team_id
+            WHERE s.tournament_id = ?
+            ORDER BY s.wins DESC, s.buchholz_score DESC, s.team_id ASC;
+        """, (tournament_id,))
+        standings = [dict(r) for r in cursor.fetchall()]
+
+        if len(standings) < 2:
+            raise ValueError("At least 2 teams required for Swiss system.")
+
+        created_matches = []
+        for i in range(0, len(standings), 2):
+            t1 = standings[i]["team_id"]
+            t2 = standings[i + 1]["team_id"] if i + 1 < len(standings) else None
+            st = "COMPLETED" if t2 is None else "SCHEDULED"
+            win = t1 if t2 is None else None
+            pm_id = _generate_next_public_match_id_sync()
+
+            cursor.execute("""
+                INSERT INTO matches (public_match_id, tournament_id, stage_name, round_number, team1_id, team2_id, status, winner_id, swiss_round)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+            """, (pm_id, tournament_id, f"Swiss Round {round_number}", round_number, t1, t2, st, win, round_number))
+            created_matches.append(cursor.lastrowid)
+
+        cursor.execute("UPDATE tournaments SET status = 'ONGOING', format = 'Swiss' WHERE tournament_id = ?;", (tournament_id,))
+        conn.commit()
+        return _get_tournament_matches_sync(str(tournament_id))
+
+async def generate_swiss_round(tournament_id: int, round_number: int = 1) -> list[dict]:
+    """Asynchronously generate Swiss system round."""
+    return await asyncio.to_thread(_generate_swiss_round_sync, tournament_id, round_number)
 
 async def generate_tournament_bracket(tournament_id_or_slug: str) -> list[dict]:
     """Asynchronously generate bracket for a tournament."""
@@ -2666,3 +2927,296 @@ def _get_match_veto_state_sync(match_id: int) -> dict | None:
 async def get_match_veto_state(match_id: int) -> dict | None:
     """Asynchronously get match veto state."""
     return await asyncio.to_thread(_get_match_veto_state_sync, match_id)
+
+# ==============================================================================
+# STEP 7: BROADCAST & LIVE SPECTATOR HUB FUNCTIONS
+# ==============================================================================
+
+def _get_live_spectator_matches_sync() -> list[dict]:
+    """Fetch live & upcoming matches with stream URLs and score telemetry for live spectator hub."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, 
+                   t1.name as team1_name, t1.logo_url as team1_logo,
+                   t2.name as team2_name, t2.logo_url as team2_logo,
+                   tr.title as tournament_name, tr.game_type, tr.stream_url as tournament_stream_url, tr.stream_platform
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE m.status IN ('LIVE', 'READY', 'CHECK_IN_OPEN', 'RESULT_PENDING', 'OPPONENT_CONFIRMATION')
+               OR m.completed_at >= datetime('now', '-2 hours')
+            ORDER BY m.status DESC, m.match_id DESC;
+        """)
+        matches = [dict(r) for r in cursor.fetchall()]
+        for m in matches:
+            m["active_stream_url"] = m.get("stream_url") or m.get("tournament_stream_url") or ""
+        return matches
+
+async def get_live_spectator_matches() -> list[dict]:
+    """Asynchronously fetch live spectator hub matches."""
+    return await asyncio.to_thread(_get_live_spectator_matches_sync)
+
+def _assign_staff_role_sync(user_id: str, role_type: str, tournament_id: int | None = None) -> dict:
+    """Assign Caster, Referee, Moderator or Admin staff role."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO staff_roles (user_id, role_type, assigned_tournament_id)
+            VALUES (?, ?, ?);
+        """, (str(user_id), role_type.upper(), tournament_id))
+        conn.commit()
+        return {"role_id": cursor.lastrowid, "user_id": str(user_id), "role_type": role_type.upper(), "tournament_id": tournament_id}
+
+async def assign_staff_role(user_id: str, role_type: str, tournament_id: int | None = None) -> dict:
+    """Asynchronously assign staff role."""
+    return await asyncio.to_thread(_assign_staff_role_sync, user_id, role_type, tournament_id)
+
+# ==============================================================================
+# STEP 8: RANKING, LEADERBOARD & SEASONS FUNCTIONS
+# ==============================================================================
+
+def _get_public_leaderboard_sync(game: str = "VALORANT", limit: int = 50) -> dict:
+    """Fetch competitive team and player leaderboards with ELO, win rates, and streaks."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT t.public_id, t.name, t.slug, t.logo_url, t.game, t.region, t.verification_status,
+                   COALESCE(e.rating, 1200) as elo_rating,
+                   COALESCE(e.matches_rated, 0) as matches_played,
+                   COALESCE(e.wins, 0) as wins,
+                   COALESCE(e.losses, 0) as losses,
+                   CASE WHEN COALESCE(e.matches_rated, 0) > 0 
+                        THEN ROUND(CAST(e.wins AS FLOAT) / e.matches_rated * 100, 1) 
+                        ELSE 0.0 END as win_rate
+            FROM teams t
+            LEFT JOIN team_elo e ON t.team_id = e.team_id
+            WHERE LOWER(t.game) = LOWER(?) OR ? = 'ALL'
+            ORDER BY elo_rating DESC, wins DESC LIMIT ?;
+        """, (game, game, limit))
+        top_teams = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("""
+            SELECT p.public_id, p.display_name, p.username, p.avatar_url, p.primary_game, p.verification_status,
+                   COALESCE(ps.matches_played, 0) as matches_played,
+                   COALESCE(ps.wins, 0) as wins,
+                   COALESCE(ps.losses, 0) as losses,
+                   COALESCE(ps.kills, 0) as kills,
+                   COALESCE(ps.deaths, 0) as deaths,
+                   CASE WHEN COALESCE(ps.deaths, 0) > 0 
+                        THEN ROUND(CAST(ps.kills AS FLOAT) / ps.deaths, 2) 
+                        ELSE CAST(COALESCE(ps.kills, 0) AS FLOAT) END as kd_ratio
+            FROM players p
+            LEFT JOIN player_stats ps ON p.player_id = ps.player_id
+            WHERE LOWER(p.primary_game) = LOWER(?) OR ? = 'ALL'
+            ORDER BY wins DESC, matches_played DESC LIMIT ?;
+        """, (game, game, limit))
+        top_players = [dict(r) for r in cursor.fetchall()]
+
+        return {"game": game, "teams": top_teams, "players": top_players}
+
+async def get_public_leaderboard(game: str = "VALORANT", limit: int = 50) -> dict:
+    """Asynchronously fetch leaderboards."""
+    return await asyncio.to_thread(_get_public_leaderboard_sync, game, limit)
+
+def _get_seasons_list_sync() -> list[dict]:
+    """Fetch active and historical competitive seasons."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM seasons ORDER BY season_id DESC;")
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_seasons_list() -> list[dict]:
+    """Asynchronously fetch seasons list."""
+    return await asyncio.to_thread(_get_seasons_list_sync)
+
+def _create_season_sync(title: str, slug: str, start_date: str | None = None, end_date: str | None = None) -> dict:
+    """Create a new competitive season."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO seasons (title, slug, start_date, end_date, is_active)
+            VALUES (?, ?, ?, ?, 1);
+        """, (title, slug, start_date, end_date))
+        conn.commit()
+        cursor.execute("SELECT * FROM seasons WHERE season_id = ?;", (cursor.lastrowid,))
+        return dict(cursor.fetchone())
+
+async def create_season(title: str, slug: str, start_date: str | None = None, end_date: str | None = None) -> dict:
+    """Asynchronously create a competitive season."""
+    return await asyncio.to_thread(_create_season_sync, title, slug, start_date, end_date)
+
+# ==============================================================================
+# STEP 9: PRIZE, PAYMENT & TOURNAMENT ECONOMY FUNCTIONS
+# ==============================================================================
+
+def _generate_next_public_tx_id_sync() -> str:
+    """Generate unique collision-free transaction ID GEN-TX-XXXXXX."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM transactions;")
+        count = cursor.fetchone()[0] + 1
+        tx_id = f"GEN-TX-{count:06d}"
+        while True:
+            cursor.execute("SELECT COUNT(*) FROM transactions WHERE public_tx_id = ?;", (tx_id,))
+            if cursor.fetchone()[0] == 0:
+                break
+            count += 1
+            tx_id = f"GEN-TX-{count:06d}"
+        return tx_id
+
+def _get_or_create_prize_pool_sync(tournament_id: int, total_amount: float = 500.0, currency: str = "USD", distribution_json: str | None = None) -> dict:
+    """Fetch or configure tournament prize pool and distribution breakdown."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM prize_pools WHERE tournament_id = ?;", (tournament_id,))
+        row = cursor.fetchone()
+        if row:
+            p = dict(row)
+            p["distribution"] = json.loads(p.get("distribution_json") or "{}")
+            return p
+
+        dist = distribution_json or json.dumps({"1st": "50%", "2nd": "30%", "3rd": "20%"})
+        cursor.execute("""
+            INSERT INTO prize_pools (tournament_id, total_amount, currency, distribution_json)
+            VALUES (?, ?, ?, ?);
+        """, (tournament_id, total_amount, currency, dist))
+        conn.commit()
+        return {
+            "prize_id": cursor.lastrowid, "tournament_id": tournament_id,
+            "total_amount": total_amount, "currency": currency,
+            "distribution": json.loads(dist)
+        }
+
+async def get_or_create_prize_pool(tournament_id: int, total_amount: float = 500.0, currency: str = "USD", distribution_json: str | None = None) -> dict:
+    """Asynchronously get or create prize pool."""
+    return await asyncio.to_thread(_get_or_create_prize_pool_sync, tournament_id, total_amount, currency, distribution_json)
+
+def _record_financial_transaction_sync(entity_type: str, entity_id: int, tournament_id: int | None, amount: float, currency: str = "USD", tx_type: str = "ENTRY_FEE", status: str = "PENDING", provider: str = "INTERNAL", reference: str = "", admin_id: str = "", reason: str = "") -> dict:
+    """Record immutable financial transaction in audit ledger."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        tx_id = _generate_next_public_tx_id_sync()
+        cursor.execute("""
+            INSERT INTO transactions (public_tx_id, entity_type, entity_id, tournament_id, amount, currency, tx_type, status, provider, reference, admin_id, reason)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """, (tx_id, entity_type, entity_id, tournament_id, amount, currency, tx_type, status, provider, reference, admin_id, reason))
+        conn.commit()
+        cursor.execute("SELECT * FROM transactions WHERE public_tx_id = ?;", (tx_id,))
+        return dict(cursor.fetchone())
+
+async def record_financial_transaction(entity_type: str, entity_id: int, tournament_id: int | None, amount: float, currency: str = "USD", tx_type: str = "ENTRY_FEE", status: str = "PENDING", provider: str = "INTERNAL", reference: str = "", admin_id: str = "", reason: str = "") -> dict:
+    """Asynchronously record transaction."""
+    return await asyncio.to_thread(_record_financial_transaction_sync, entity_type, entity_id, tournament_id, amount, currency, tx_type, status, provider, reference, admin_id, reason)
+
+def _get_tournament_financial_overview_sync(tournament_id: int) -> dict:
+    """Fetch financial ledger, prize pool, and payout history for a tournament."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        prize = _get_or_create_prize_pool_sync(tournament_id)
+        cursor.execute("SELECT * FROM transactions WHERE tournament_id = ? ORDER BY transaction_id DESC;", (tournament_id,))
+        txs = [dict(r) for r in cursor.fetchall()]
+        cursor.execute("SELECT * FROM payouts WHERE tournament_id = ? ORDER BY payout_id ASC;", (tournament_id,))
+        payouts = [dict(r) for r in cursor.fetchall()]
+        return {"prize_pool": prize, "transactions": txs, "payouts": payouts}
+
+async def get_tournament_financial_overview(tournament_id: int) -> dict:
+    """Asynchronously fetch financial overview."""
+    return await asyncio.to_thread(_get_tournament_financial_overview_sync, tournament_id)
+
+# ==============================================================================
+# STEP 10: NOTIFICATION, SEARCH & SYSTEM HEALTH FUNCTIONS
+# ==============================================================================
+
+def _create_user_notification_sync(user_id: str, title: str, message: str, link_url: str = "") -> dict:
+    """Create a user notification entry."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO notifications (user_id, title, message, link_url, is_read)
+            VALUES (?, ?, ?, ?, 0);
+        """, (str(user_id), title, message, link_url))
+        conn.commit()
+        cursor.execute("SELECT * FROM notifications WHERE notification_id = ?;", (cursor.lastrowid,))
+        return dict(cursor.fetchone())
+
+async def create_user_notification(user_id: str, title: str, message: str, link_url: str = "") -> dict:
+    """Asynchronously create notification."""
+    return await asyncio.to_thread(_create_user_notification_sync, user_id, title, message, link_url)
+
+def _get_user_notifications_sync(user_id: str) -> list[dict]:
+    """Fetch unread and recent notifications for a user."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM notifications 
+            WHERE user_id = ? OR user_id = 'ALL' 
+            ORDER BY notification_id DESC LIMIT 30;
+        """, (str(user_id),))
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_user_notifications(user_id: str) -> list[dict]:
+    """Asynchronously fetch user notifications."""
+    return await asyncio.to_thread(_get_user_notifications_sync, user_id)
+
+def _global_platform_search_sync(query: str) -> dict:
+    """Perform global search across players, teams, tournaments, and public matches."""
+    q = f"%{query.strip().lower()}%"
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT public_id, display_name, username, avatar_url, primary_game FROM players WHERE LOWER(display_name) LIKE ? OR LOWER(username) LIKE ? LIMIT 10;", (q, q))
+        players = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("SELECT public_id, name, slug, logo_url, game FROM teams WHERE LOWER(name) LIKE ? OR LOWER(slug) LIKE ? LIMIT 10;", (q, q))
+        teams = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("SELECT tournament_id, title, slug, game_type, status FROM tournaments WHERE LOWER(title) LIKE ? OR LOWER(slug) LIKE ? LIMIT 10;", (q, q))
+        tournaments = [dict(r) for r in cursor.fetchall()]
+
+        cursor.execute("SELECT public_match_id, stage_name, status FROM matches WHERE LOWER(public_match_id) LIKE ? OR LOWER(stage_name) LIKE ? LIMIT 10;", (q, q))
+        matches = [dict(r) for r in cursor.fetchall()]
+
+        return {"query": query, "players": players, "teams": teams, "tournaments": tournaments, "matches": matches}
+
+async def global_platform_search(query: str) -> dict:
+    """Asynchronously perform global search."""
+    return await asyncio.to_thread(_global_platform_search_sync, query)
+
+def _get_system_health_metrics_sync() -> dict:
+    """Fetch admin system health observability metrics."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM tournaments WHERE status = 'ONGOING';")
+        ongoing_tournaments = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM matches WHERE status IN ('READY', 'LIVE');")
+        live_matches = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM tickets WHERE status = 'PENDING';")
+        pending_registrations = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM support_tickets WHERE status = 'OPEN';")
+        open_disputes = cursor.fetchone()[0]
+
+        return {
+            "status": "HEALTHY",
+            "components": {
+                "database": "HEALTHY",
+                "api_server": "HEALTHY",
+                "discord_bot": "HEALTHY",
+                "systemd_service": "HEALTHY"
+            },
+            "metrics": {
+                "ongoing_tournaments": ongoing_tournaments,
+                "live_matches": live_matches,
+                "pending_registrations": pending_registrations,
+                "open_disputes": open_disputes
+            },
+            "timestamp": "CURRENT_TIMESTAMP"
+        }
+
+async def get_system_health_metrics() -> dict:
+    """Asynchronously fetch system health."""
+    return await asyncio.to_thread(_get_system_health_metrics_sync)

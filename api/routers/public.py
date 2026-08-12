@@ -170,6 +170,55 @@ async def get_user_cases_api(user_id: str):
     cases = await get_user_all_cases(user_id)
     return cases
 
+@router.get("/health", summary="Get Public System Health Status")
+async def get_public_health_status_api():
+    """Return basic health indicator."""
+    return {"status": "HEALTHY", "service": "GEN Esports Platform API"}
+
+@router.get("/search", summary="Global Platform Search")
+async def global_search_api(q: str):
+    """Global search across players, teams, tournaments, and matches."""
+    from database.db import global_platform_search
+    if not q or len(q.strip()) < 2:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Search query must be at least 2 characters.")
+    res = await global_platform_search(q)
+    return res
+
+@router.get("/user/notifications", summary="Get User Notifications")
+async def get_user_notifications_api(user_id: str):
+    """Return recent notifications for a user."""
+    from database.db import get_user_notifications
+    notifs = await get_user_notifications(user_id)
+    return notifs
+
+@router.get("/tournaments/{tournament_id}/economy", summary="Get Tournament Economy & Prize Pool")
+async def get_tournament_economy_api(tournament_id: int):
+    """Return prize pool distribution and ledger overview."""
+    from database.db import get_tournament_financial_overview
+    overview = await get_tournament_financial_overview(tournament_id)
+    return overview
+
+@router.get("/leaderboard", summary="Get Competitive Leaderboard")
+async def get_leaderboard_api(game: str = "VALORANT"):
+    """Return competitive team & player leaderboards filtered by game."""
+    from database.db import get_public_leaderboard
+    res = await get_public_leaderboard(game)
+    return res
+
+@router.get("/seasons", summary="Get Competitive Seasons List")
+async def get_seasons_api():
+    """Return active & historical competitive seasons."""
+    from database.db import get_seasons_list
+    seasons = await get_seasons_list()
+    return seasons
+
+@router.get("/live", summary="Get Live Spectator Matches & Broadcast Streams")
+async def get_live_spectator_hub_api():
+    """Return live spectator matches with stream URLs and score telemetry."""
+    from database.db import get_live_spectator_matches
+    matches = await get_live_spectator_matches()
+    return matches
+
 @router.get("/tournaments/{tournament_id}/rules", summary="Get Tournament Ruleset")
 async def get_tournament_ruleset_api(tournament_id: int):
     """Return tournament ruleset, BO3 veto sequence, allowed maps, and version."""
