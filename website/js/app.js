@@ -209,8 +209,30 @@ const App = {
     // RENDER HOME VIEW
     async renderHomeView() {
         const container = document.getElementById('app-content');
-        const stats = await Api.getStats();
-        const tournaments = await Api.getTournaments();
+        if (!container) return;
+
+        let stats = { total_tournaments: 0, approved_registrations: 0, completed_matches: 0, registered_players: 0 };
+        let tournaments = [];
+
+        try {
+            const rawStats = await Api.getStats();
+            if (rawStats && typeof rawStats === 'object') {
+                stats = { ...stats, ...rawStats };
+            }
+        } catch (e) {
+            console.warn('Stats fetch notice in Home:', e);
+        }
+
+        try {
+            const rawTournaments = await Api.getTournaments();
+            if (Array.isArray(rawTournaments)) {
+                tournaments = rawTournaments;
+            }
+        } catch (e) {
+            console.warn('Tournaments fetch notice in Home:', e);
+        }
+
+        const featuredTournaments = tournaments.slice(0, 3);
 
         container.innerHTML = `
             <section class="hero-section">
@@ -262,7 +284,13 @@ const App = {
                     <a href="#tournaments" onclick="App.renderView('tournaments')" style="color: var(--accent-cyan); font-weight: 600; text-decoration: none;">View All &rarr;</a>
                 </div>
                 <div class="tournaments-grid">
-                    ${tournaments.slice(0, 3).map(t => this.buildTournamentCardHtml(t)).join('')}
+                    ${featuredTournaments.length === 0 ? `
+                        <div class="glass-panel" style="padding: 3rem; text-align: center; grid-column: 1 / -1;">
+                            <div style="font-size: 2.5rem; margin-bottom: 0.75rem;">🏆</div>
+                            <h3>No Active Tournaments</h3>
+                            <p style="color: var(--text-secondary); margin-top: 0.25rem;">Check back soon for upcoming GEN Esports events.</p>
+                        </div>
+                    ` : featuredTournaments.map(t => this.buildTournamentCardHtml(t)).join('')}
                 </div>
             </section>
         `;
