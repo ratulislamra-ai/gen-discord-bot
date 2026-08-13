@@ -3593,6 +3593,132 @@ async def get_user_team_membership(discord_user_id: str) -> dict | None:
     """Asynchronously fetch team membership."""
     return await asyncio.to_thread(_get_user_team_membership_sync, discord_user_id)
 
+def _get_player_current_match_sync(discord_user_id: str) -> dict | None:
+    """
+    Fetch the player's currently active or upcoming match.
+    First finds the player's team, then finds their active/pending match.
+    """
+    membership = _get_user_team_membership_sync(discord_user_id)
+    team_id = None
+    team_name = None
+
+    if membership:
+        team_id = membership["team_id"]
+        team_name = membership["team_name"]
+    else:
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT t.name as team_name, t.team_id
+                FROM tickets tk
+                JOIN teams t ON LOWER(tk.team_name) = LOWER(t.name)
+                WHERE CAST(tk.user_id AS TEXT) = ? AND tk.status = 'APPROVED'
+                ORDER BY tk.ticket_id DESC LIMIT 1;
+            """, (str(discord_user_id),))
+            tk_row = cursor.fetchone()
+            if tk_row:
+                team_id = tk_row["team_id"]
+                team_name = tk_row["team_name"]
+            else:
+                return None
+
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, 
+                   t1.name as team1_name, t1.slug as team1_slug, t1.captain_player_id as t1_captain_id,
+                   t2.name as team2_name, t2.slug as team2_slug, t2.captain_player_id as t2_captain_id,
+                   tr.title as tournament_name, tr.game_type as tournament_game, tr.slug as tournament_slug,
+                   p1.display_name as t1_captain_name, p1.discord_user_id as t1_captain_discord,
+                   p2.display_name as t2_captain_name, p2.discord_user_id as t2_captain_discord
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            LEFT JOIN players p1 ON t1.captain_player_id = p1.player_id
+            LEFT JOIN players p2 ON t2.captain_player_id = p2.player_id
+            WHERE (m.team1_id = ? OR m.team2_id = ? OR (t1.name IS NOT NULL AND LOWER(t1.name) = LOWER(?)) OR (t2.name IS NOT NULL AND LOWER(t2.name) = LOWER(?)))
+              AND m.status NOT IN ('COMPLETED', 'CANCELLED')
+            ORDER BY CASE WHEN m.status = 'LIVE' THEN 1 WHEN m.status = 'CHECK_IN' THEN 2 ELSE 3 END,
+                     m.scheduled_time ASC, m.match_id DESC
+            LIMIT 1;
+        """, (team_id, team_id, team_name, team_name))
+        row = cursor.fetchone()
+        if not row:
+            cursor.execute("""
+                SELECT m.*, 
+                       t1.name as team1_name, t1.slug as team1_slug, t1.captain_player_id as t1_captain_id,
+                       t2.name as team2_name, t2.slug as team2_slug, t2.captain_player_id as t2_captain_id,
+                       tr.title as tournament_name, tr.game_type as tournament_game, tr.slug as tournament_slug,
+                       p1.display_name as t1_captain_name, p1.discord_user_id as t1_captain_discord,
+                       p2.display_name as t2_captain_name, p2.discord_user_id as t2_captain_discord
+                FROM matches m
+                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+                LEFT JOIN players p1 ON t1.captain_player_id = p1.player_id
+                LEFT JOIN players p2 ON t2.captain_player_id = p2.player_id
+                WHERE (m.team1_id = ? OR m.team2_id = ? OR (t1.name IS NOT NULL AND LOWER(t1.name) = LOWER(?)) OR (t2.name IS NOT NULL AND LOWER(t2.name) = LOWER(?)))
+                ORDER BY m.match_id DESC
+                LIMIT 1;
+            """, (team_id, team_id, team_name, team_name))
+            row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        match_dict = dict(row)
+        if match_dict.get("team1_id") == team_id or (match_dict.get("team1_name") and team_name and match_dict["team1_name"].lower() == team_name.lower()):
+            match_dict["my_team_id"] = match_dict.get("team1_id")
+            match_dict["my_team_name"] = match_dict.get("team1_name") or "Your Team"
+            match_dict["opponent_team_id"] = match_dict.get("team2_id")
+            match_dict["opponent_team_name"] = match_dict.get("team2_name") or "TBD / Bye"
+            match_dict["opponent_team_slug"] = match_dict.get("team2_slug")
+            match_dict["opponent_captain_name"] = match_dict.get("t2_captain_name")
+            match_dict["opponent_captain_discord"] = match_dict.get("t2_captain_discord")
+        else:
+            match_dict["my_team_id"] = match_dict.get("team2_id")
+            match_dict["my_team_name"] = match_dict.get("team2_name") or "Your Team"
+            match_dict["opponent_team_id"] = match_dict.get("team1_id")
+            match_dict["opponent_team_name"] = match_dict.get("team1_name") or "TBD / Bye"
+            match_dict["opponent_team_slug"] = match_dict.get("team1_slug")
+            match_dict["opponent_captain_name"] = match_dict.get("t1_captain_name")
+            match_dict["opponent_captain_discord"] = match_dict.get("t1_captain_discord")
+
+        return match_dict
+
+async def get_player_current_match(discord_user_id: str) -> dict | None:
+    """Asynchronously fetch player's current match."""
+    return await asyncio.to_thread(_get_player_current_match_sync, discord_user_id)
+
+def _get_player_upcoming_matches_sync(discord_user_id: str) -> list[dict]:
+    """Fetch all upcoming/scheduled matches for a player's team."""
+    membership = _get_user_team_membership_sync(discord_user_id)
+    if not membership:
+        return []
+
+    team_id = membership["team_id"]
+    team_name = membership["team_name"]
+
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, 
+                   t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE (m.team1_id = ? OR m.team2_id = ? OR (t1.name IS NOT NULL AND LOWER(t1.name) = LOWER(?)) OR (t2.name IS NOT NULL AND LOWER(t2.name) = LOWER(?)))
+            ORDER BY m.scheduled_time ASC, m.match_id DESC
+            LIMIT 10;
+        """, (team_id, team_id, team_name, team_name))
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_player_upcoming_matches(discord_user_id: str) -> list[dict]:
+    """Asynchronously fetch upcoming matches for a player."""
+    return await asyncio.to_thread(_get_player_upcoming_matches_sync, discord_user_id)
+
 def _add_player_to_team_roster_sync(team_id: int, target_discord_id: str, username: str = "", display_name: str = "", role: str = "PLAYER") -> dict:
     """Add a player to team roster with server-side validation."""
     with _get_connection() as conn:
