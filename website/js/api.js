@@ -405,6 +405,22 @@ const Api = {
     },
 
     /**
+     * Schedule match & set lobby info via Admin API
+     */
+    async scheduleMatch(apiKey, matchId, data) {
+        const res = await fetch(`${API_BASE}/admin/matches/${matchId}/schedule`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+            body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP error ${res.status}`);
+        }
+        return await res.json();
+    },
+
+    /**
      * Fetch tournament ruleset
      */
     async getTournamentRules(tournamentId) {
