@@ -7,7 +7,7 @@ from config.settings import DB_PATH
 
 def _get_connection():
     """Helper function to create a database connection with row factory."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -1901,7 +1901,7 @@ async def get_tournament_bracket_tree(tournament_id_or_slug: str) -> dict:
     """Asynchronously fetch structured bracket tree."""
     return await asyncio.to_thread(_get_tournament_bracket_tree_sync, tournament_id_or_slug)
 
-def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int, winner_id: int | None = None, status: str = "COMPLETED") -> dict | None:
+def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int, winner_id: int | None = None, status: str = "COMPLETED", evidence_url: str | None = None) -> dict | None:
     """Synchronously record match result and auto-advance winner to next round match."""
     with _get_connection() as conn:
         cursor = conn.cursor()
@@ -1918,12 +1918,20 @@ def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int,
             elif team2_score > team1_score:
                 winner_id = match["team2_id"]
 
-        cursor.execute("""
-            UPDATE matches 
-            SET team1_score = ?, team2_score = ?, score_a = ?, score_b = ?, winner_id = ?, status = ?,
-                admin_verification_status = 'APPROVED', completed_at = CURRENT_TIMESTAMP
-            WHERE match_id = ?;
-        """, (team1_score, team2_score, team1_score, team2_score, winner_id, status, match_id))
+        if evidence_url:
+            cursor.execute("""
+                UPDATE matches 
+                SET team1_score = ?, team2_score = ?, score_a = ?, score_b = ?, winner_id = ?, status = ?,
+                    evidence_url = ?, admin_verification_status = 'APPROVED', completed_at = CURRENT_TIMESTAMP
+                WHERE match_id = ?;
+            """, (team1_score, team2_score, team1_score, team2_score, winner_id, status, evidence_url, match_id))
+        else:
+            cursor.execute("""
+                UPDATE matches 
+                SET team1_score = ?, team2_score = ?, score_a = ?, score_b = ?, winner_id = ?, status = ?,
+                    admin_verification_status = 'APPROVED', completed_at = CURRENT_TIMESTAMP
+                WHERE match_id = ?;
+            """, (team1_score, team2_score, team1_score, team2_score, winner_id, status, match_id))
 
         # Check bracket progression
         cursor.execute("SELECT * FROM brackets WHERE match_id = ?;", (match_id,))
@@ -1963,9 +1971,9 @@ def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int,
         cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (match_id,))
         return dict(cursor.fetchone())
 
-async def update_match_result(match_id: int, team1_score: int, team2_score: int, winner_id: int | None = None, status: str = "COMPLETED") -> dict | None:
+async def update_match_result(match_id: int, team1_score: int, team2_score: int, winner_id: int | None = None, status: str = "COMPLETED", evidence_url: str | None = None) -> dict | None:
     """Asynchronously record match result."""
-    return await asyncio.to_thread(_update_match_result_sync, match_id, team1_score, team2_score, winner_id, status)
+    return await asyncio.to_thread(_update_match_result_sync, match_id, team1_score, team2_score, winner_id, status, evidence_url)
 
 def _get_tournament_standings_sync(tournament_id_or_slug: str) -> list[dict]:
     """Calculate tournament leaderboard standings based on match results."""

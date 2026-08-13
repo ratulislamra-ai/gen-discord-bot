@@ -1678,15 +1678,18 @@ const App = {
         }
     },
 
+    selectedEvidenceFile: null,
+
     showScoreInputModal(matchId, t1Name, t2Name, currentScore1 = 0, currentScore2 = 0) {
+        this.selectedEvidenceFile = null;
         this.showModal(`
-            <div style="max-width: 500px; margin: 0 auto;">
+            <div style="max-width: 520px; margin: 0 auto;">
                 <h3 style="font-family: var(--font-heading); font-size: 1.6rem; margin-bottom: 0.5rem; text-align: center; color: #fff;">⚔️ ENTER MATCH RESULT</h3>
                 <p style="color: var(--text-secondary); font-size: 0.9rem; text-align: center; margin-bottom: 1.5rem;">
-                    Match #${matchId} • Submit scores to determine winner & auto-advance bracket.
+                    Match #${matchId} • Submit scores & screenshot evidence to advance bracket.
                 </p>
                 <form onsubmit="App.handleSaveMatchScore(event, ${matchId})">
-                    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--border-card); padding: 1.5rem; border-radius: var(--radius-md); margin-bottom: 1.5rem;">
+                    <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center; background: rgba(0,0,0,0.3); border: 1px solid var(--border-card); padding: 1.25rem; border-radius: var(--radius-md); margin-bottom: 1.25rem;">
                         <div style="text-align: center;">
                             <div style="font-weight: 800; font-size: 1.1rem; color: var(--accent-cyan); margin-bottom: 0.5rem;">${this.escapeHtml(t1Name)}</div>
                             <input type="number" id="m-score1" class="form-input" value="${currentScore1}" min="0" style="text-align: center; font-weight: 800; font-size: 1.4rem;" required>
@@ -1697,7 +1700,38 @@ const App = {
                             <input type="number" id="m-score2" class="form-input" value="${currentScore2}" min="0" style="text-align: center; font-weight: 800; font-size: 1.4rem;" required>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-size: 1rem; font-weight: 700;">
+
+                    <div style="margin-bottom: 1.5rem;">
+                        <label style="display: block; font-weight: 700; font-size: 0.9rem; margin-bottom: 0.5rem; color: #fff;">
+                            📸 Screenshot Evidence <span style="color: var(--accent-cyan);">*</span>
+                        </label>
+                        
+                        <div id="m-evidence-dropzone" class="evidence-dropzone" onclick="document.getElementById('m-evidence-file').click()" ondragover="App.handleEvidenceDragOver(event)" ondragleave="App.handleEvidenceDragLeave(event)" ondrop="App.handleEvidenceDrop(event)">
+                            <div id="m-evidence-prompt">
+                                <div style="font-size: 1.8rem; margin-bottom: 0.4rem;">📸</div>
+                                <div style="font-size: 0.95rem; font-weight: 700; color: #fff; margin-bottom: 0.25rem;">
+                                    Drag & drop screenshot here
+                                </div>
+                                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
+                                    or
+                                </div>
+                                <button type="button" class="btn btn-secondary" style="padding: 0.4rem 1rem; font-size: 0.85rem;" onclick="event.stopPropagation(); document.getElementById('m-evidence-file').click()">
+                                    📎 Choose Screenshot
+                                </button>
+                                <div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.75rem;">
+                                    PNG, JPG, WEBP • Max 10 MB
+                                </div>
+                            </div>
+                            
+                            <div id="m-evidence-preview" style="display: none;"></div>
+                        </div>
+                        <input type="file" id="m-evidence-file" accept="image/png, image/jpeg, image/jpg, image/webp" style="display: none;" onchange="App.handleEvidenceFileSelect(event)">
+                        <p style="color: var(--text-secondary); font-size: 0.8rem; margin-top: 0.4rem;">
+                            Upload a clear screenshot of the final match result.
+                        </p>
+                    </div>
+
+                    <button type="submit" id="m-score-submit-btn" class="btn btn-primary" style="width: 100%; padding: 0.85rem; font-size: 1rem; font-weight: 700;">
                         🏆 SUBMIT RESULT & ADVANCE WINNER
                     </button>
                 </form>
@@ -1705,21 +1739,132 @@ const App = {
         `);
     },
 
+    handleEvidenceDragOver(e) {
+        e.preventDefault();
+        const dropzone = document.getElementById('m-evidence-dropzone');
+        if (dropzone) dropzone.classList.add('dragover');
+    },
+
+    handleEvidenceDragLeave(e) {
+        e.preventDefault();
+        const dropzone = document.getElementById('m-evidence-dropzone');
+        if (dropzone) dropzone.classList.remove('dragover');
+    },
+
+    handleEvidenceDrop(e) {
+        e.preventDefault();
+        const dropzone = document.getElementById('m-evidence-dropzone');
+        if (dropzone) dropzone.classList.remove('dragover');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]) {
+            this.handleEvidenceFileSelect({ target: { files: e.dataTransfer.files } });
+        }
+    },
+
+    handleEvidenceFileSelect(e) {
+        const file = e.target.files ? e.target.files[0] : null;
+        if (!file) return;
+
+        const validTypes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+        if (!validTypes.includes(file.type.toLowerCase())) {
+            this.showToast('✕ Invalid file type. Only PNG, JPG, and WEBP images are allowed.', 'error');
+            e.target.value = '';
+            return;
+        }
+
+        if (file.size > 10 * 1024 * 1024) {
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            this.showToast(`✕ File size (${sizeMB} MB) exceeds maximum allowed limit of 10 MB.`, 'error');
+            e.target.value = '';
+            return;
+        }
+
+        this.selectedEvidenceFile = file;
+        this.renderEvidencePreview(file);
+    },
+
+    renderEvidencePreview(file) {
+        const promptEl = document.getElementById('m-evidence-prompt');
+        const previewEl = document.getElementById('m-evidence-preview');
+        if (!promptEl || !previewEl) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const sizeMB = (file.size / (1024 * 1024)).toFixed(2);
+            previewEl.innerHTML = `
+                <div class="evidence-preview-card">
+                    <div style="display: flex; align-items: center; gap: 0.85rem; overflow: hidden;">
+                        <img src="${e.target.result}" alt="Evidence Preview" style="width: 56px; height: 56px; border-radius: 8px; object-fit: cover; border: 2px solid var(--accent-cyan); flex-shrink: 0;">
+                        <div style="text-align: left; overflow: hidden;">
+                            <div style="font-weight: 700; font-size: 0.9rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                ${this.escapeHtml(file.name)}
+                            </div>
+                            <div style="font-size: 0.8rem; color: var(--text-secondary);">
+                                ${sizeMB} MB
+                            </div>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem; color: var(--accent-red); border-color: var(--accent-red); flex-shrink: 0;" onclick="event.stopPropagation(); App.removeEvidenceFile();">
+                        ✕ Remove
+                    </button>
+                </div>
+            `;
+            promptEl.style.display = 'none';
+            previewEl.style.display = 'block';
+        };
+        reader.readAsDataURL(file);
+    },
+
+    removeEvidenceFile() {
+        this.selectedEvidenceFile = null;
+        const fileInput = document.getElementById('m-evidence-file');
+        if (fileInput) fileInput.value = '';
+
+        const promptEl = document.getElementById('m-evidence-prompt');
+        const previewEl = document.getElementById('m-evidence-preview');
+        if (promptEl && previewEl) {
+            previewEl.style.display = 'none';
+            previewEl.innerHTML = '';
+            promptEl.style.display = 'block';
+        }
+    },
+
     async handleSaveMatchScore(e, matchId) {
         e.preventDefault();
         const score1 = parseInt(document.getElementById('m-score1').value || '0', 10);
         const score2 = parseInt(document.getElementById('m-score2').value || '0', 10);
+        const submitBtn = document.getElementById('m-score-submit-btn');
+
+        if (!this.selectedEvidenceFile) {
+            this.showToast('✕ Screenshot evidence is required before submitting match result.', 'error');
+            return;
+        }
 
         try {
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerText = '⏳ Uploading Evidence & Saving...';
+            }
+
+            // Step 1: Upload evidence file
+            const uploadRes = await Api.uploadMatchEvidence(this.selectedEvidenceFile, matchId);
+            const evidenceUrl = uploadRes.url;
+
+            // Step 2: Record match result & advance bracket
             await Api.submitMatchResult(this.adminApiKey, matchId, {
                 team1_score: score1,
                 team2_score: score2,
-                status: 'COMPLETED'
+                status: 'COMPLETED',
+                evidence_url: evidenceUrl
             });
+
             this.hideModal();
-            this.showToast('🏆 Match score recorded & winner advanced in bracket!', 'success');
+            this.showToast('🏆 Match score & evidence recorded! Winner advanced in bracket.', 'success');
             await this.refreshAdminData();
         } catch (err) {
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerText = '🏆 SUBMIT RESULT & ADVANCE WINNER';
+            }
             this.showToast('✕ Error recording match score: ' + err.message, 'error');
         }
     }

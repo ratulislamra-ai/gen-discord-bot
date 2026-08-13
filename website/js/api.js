@@ -421,6 +421,28 @@ const Api = {
     },
 
     /**
+     * Upload screenshot evidence file for a match result
+     */
+    async uploadMatchEvidence(file, matchId = null) {
+        const formData = new FormData();
+        formData.append('file', file);
+        if (matchId) {
+            formData.append('match_id', matchId);
+        }
+
+        const res = await fetch(`${API_BASE}/public/matches/upload-evidence`, {
+            method: 'POST',
+            body: formData
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `Upload failed with status ${res.status}`);
+        }
+        return await res.json();
+    },
+
+    /**
      * Fetch tournament ruleset
      */
     async getTournamentRules(tournamentId) {

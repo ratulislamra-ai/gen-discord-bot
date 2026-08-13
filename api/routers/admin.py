@@ -341,8 +341,9 @@ async def submit_match_result_api(match_id: int, payload: Dict[str, Any]):
     team2_score = payload.get("team2_score", 0)
     winner_id = payload.get("winner_id")
     status_val = payload.get("status", "COMPLETED")
+    evidence_url = payload.get("evidence_url") or payload.get("screenshot_url")
 
-    match = await update_match_result(match_id, int(team1_score), int(team2_score), winner_id, status_val)
+    match = await update_match_result(match_id, int(team1_score), int(team2_score), winner_id, status_val, evidence_url)
     if not match:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Match ID {match_id} not found.")
 

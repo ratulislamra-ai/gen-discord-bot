@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
 from typing import List, Dict, Any
 import config.settings as settings
 from database.db import (
@@ -254,4 +254,33 @@ async def process_veto_action_api(match_id: int, payload: Dict[str, Any]):
     if not state:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid map action or unauthorized turn.")
     return {"message": "Veto action recorded.", "veto": state}
+
+@router.post("/matches/upload-evidence", summary="Upload Match Result Evidence Screenshot")
+async def upload_match_evidence_api(
+    file: UploadFile = File(...),
+    match_id: int | None = Form(None)
+):
+    """Securely upload a match result screenshot (PNG, JPG, WEBP <= 10MB)."""
+    from utils.match_evidence_storage import save_match_evidence
+
+    if not file or not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No file uploaded.")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File size exceeds the 10 MB maximum limit.")
+
+    try:
+        local_path, relative_url = save_match_evidence(content, file.filename, match_id)
+        return {
+            "success": True,
+            "url": relative_url,
+            "filename": file.filename,
+            "size": len(content)
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to upload screenshot: {str(e)}")
+
 
