@@ -933,6 +933,7 @@ const App = {
                 </div>
             </div>
         `).join('');
+    },
 
     changeBracketTournament(slug) {
         this.activeTournamentSlug = slug;
