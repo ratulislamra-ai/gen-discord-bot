@@ -90,32 +90,92 @@ class ScoreSubmissionModal(discord.ui.Modal, title="Submit Match Result"):
 class MatchRoomScoreSubmissionModal(discord.ui.Modal, title="Submit Match Result"):
     score_a = discord.ui.TextInput(label="Your Team Score", placeholder="e.g. 13", required=True)
     score_b = discord.ui.TextInput(label="Opponent Team Score", placeholder="e.g. 9", required=True)
-    evidence_url = discord.ui.TextInput(label="Screenshot Evidence URL", placeholder="https://imgur.com/... or image link", required=False)
 
-    def __init__(self, match_id: str | int):
+    def __init__(self, match_id: str | int, bot: commands.Bot | None = None):
         super().__init__()
         self.target_match_id = str(match_id)
+        self.bot = bot
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         try:
-            m_id = self.target_match_id
             s_a = int(self.score_a.value.strip())
             s_b = int(self.score_b.value.strip())
-            ev_url = self.evidence_url.value.strip() if self.evidence_url.value else ""
+            if s_a < 0 or s_b < 0:
+                await interaction.followup.send("❌ Scores cannot be negative numbers.", ephemeral=True)
+                return
 
+            m_id = self.target_match_id
+
+            # Step 2: Prompt player to upload screenshot as message attachment
+            prompt_embed = discord.Embed(
+                title="📸 Screenshot Evidence Required",
+                description=(
+                    "**Step 2 of 2: Upload Final Match Screenshot**\n\n"
+                    "Please attach your final match-result screenshot image in this channel within **3 minutes**.\n\n"
+                    "• **Supported Formats:** PNG, JPG, JPEG, WEBP\n"
+                    "• **Maximum File Size:** 10 MB\n\n"
+                    "*Simply drag & drop or upload your screenshot image as a message in this channel.*"
+                ),
+                color=discord.Color.from_rgb(0, 240, 255)
+            )
+            await interaction.followup.send(embed=prompt_embed, ephemeral=True)
+
+            bot = self.bot or interaction.client
+
+            def check_attachment(msg: discord.Message):
+                return (
+                    msg.author.id == interaction.user.id
+                    and msg.channel.id == interaction.channel.id
+                    and len(msg.attachments) > 0
+                )
+
+            import asyncio
+            try:
+                msg = await bot.wait_for("message", check=check_attachment, timeout=180.0)
+            except asyncio.TimeoutError:
+                await interaction.followup.send("⏱️ Screenshot evidence upload timed out (3 minutes limit). Please click 📝 SUBMIT SCORE again when ready.", ephemeral=True)
+                return
+
+            attachment = msg.attachments[0]
+
+            # Server-side validation: File size <= 10 MB
+            if attachment.size > 10 * 1024 * 1024:
+                size_mb = attachment.size / (1024 * 1024)
+                await interaction.followup.send(f"❌ File size ({size_mb:.2f} MB) exceeds the maximum allowed limit of 10 MB.", ephemeral=True)
+                return
+
+            # Server-side validation: Image format
+            filename = attachment.filename.lower()
+            valid_exts = (".png", ".jpg", ".jpeg", ".webp")
+            if not any(filename.endswith(ext) for ext in valid_exts):
+                await interaction.followup.send("❌ Invalid file format. Only PNG, JPG, JPEG, and WEBP image files are allowed as evidence.", ephemeral=True)
+                return
+
+            # Download raw attachment bytes & save via match_evidence_storage helper
+            file_bytes = await attachment.read()
+            from utils.match_evidence_storage import save_match_evidence
+            local_path, rel_url = save_match_evidence(file_bytes, attachment.filename, m_id)
+
+            # Submit match result to DB with evidence URL
             match_res = await submit_match_score(
                 match_id=m_id,
                 submitting_team_id=0,
                 submitting_user_id=str(interaction.user.id),
                 score_a=s_a,
                 score_b=s_b,
-                evidence_url=ev_url
+                evidence_url=rel_url
             )
 
             if not match_res:
                 await interaction.followup.send("❌ Match not found or invalid submission.", ephemeral=True)
                 return
+
+            # Clean up user upload message if bot has permissions
+            try:
+                await msg.delete()
+            except Exception:
+                pass
 
             winner_id = None
             if s_a > s_b:
@@ -140,15 +200,14 @@ class MatchRoomScoreSubmissionModal(discord.ui.Modal, title="Submit Match Result
                         logger.warning(f"Auto-provisioning next match room error: {ex}")
 
             embed = discord.Embed(
-                title="🏆 Match Result Submitted",
-                description=f"**Match ID:** `{match_res.get('public_match_id') or match_res['match_id']}`\n**Scores:** `{s_a} - {s_b}`\n**Status:** Submitted for verification.",
+                title="🏆 Match Result Submitted & Verified",
+                description=f"Result for **Match #{match_res.get('public_match_id') or match_res['match_id']}** recorded cleanly.\n\n**Scores:** `{s_a} - {s_b}`\n**Screenshot Evidence:** Saved successfully (`{attachment.filename}`).",
                 color=discord.Color.green()
             )
+            embed.set_image(url=attachment.url)
+
             if next_match_info:
                 embed.add_field(name="Next Match Bracket Status", value=f"Advanced to Match #{next_match_info.get('public_match_id') or next_match_info['match_id']}", inline=False)
-
-            if ev_url:
-                embed.add_field(name="Screenshot Evidence", value=ev_url, inline=False)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
         except ValueError:

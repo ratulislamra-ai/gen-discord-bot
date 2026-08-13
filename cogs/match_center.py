@@ -663,7 +663,7 @@ class MatchCenterMainView(discord.ui.View):
                 return
 
             from cogs.matches import MatchRoomScoreSubmissionModal
-            modal = MatchRoomScoreSubmissionModal(match_id=m["match_id"])
+            modal = MatchRoomScoreSubmissionModal(match_id=m["match_id"], bot=interaction.client)
             await interaction.response.send_modal(modal)
         except Exception as e:
             logger.error(f"Error in submit_score_button: {e}")
