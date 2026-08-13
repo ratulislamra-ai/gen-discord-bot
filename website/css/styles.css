@@ -5,13 +5,14 @@
 :root {
     --bg-dark: #06090e;
     --bg-surface: #0b101b;
-    --bg-card: rgba(14, 21, 35, 0.85);
-    --bg-card-hover: rgba(22, 33, 54, 0.95);
+    --bg-card: rgba(11, 16, 27, 0.9);
+    --bg-card-hover: rgba(16, 25, 45, 0.95);
 
-    --border-card: rgba(0, 240, 255, 0.14);
+    --border-card: rgba(0, 240, 255, 0.16);
     --border-glow: rgba(0, 240, 255, 0.45);
 
     --accent-cyan: #00f0ff;
+    --accent-blue: #0066ff;
     --accent-green: #00ff88;
     --accent-purple: #8a2be2;
     --accent-gold: #ffd700;
@@ -100,8 +101,9 @@ body {
 }
 
 .btn-primary {
-    background: linear-gradient(135deg, var(--accent-cyan), var(--accent-green));
-    color: #04070d;
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+    color: #ffffff;
+    font-weight: 700;
     box-shadow: 0 4px 20px rgba(0, 240, 255, 0.35);
 }
 
