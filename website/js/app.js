@@ -402,7 +402,9 @@ const App = {
 
         try {
             const data = await Api.getTournamentDetails(slug);
-            if (!data || !data.tournament) {
+            const t = (data && data.tournament) ? data.tournament : (data && data.title ? data : null);
+            const teams = (data && data.approved_teams) ? data.approved_teams : [];
+            if (!t) {
                 this.showModal(`
                     <div style="text-align: center; padding: 2rem;">
                         <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Tournament Not Found</h3>
@@ -412,8 +414,6 @@ const App = {
                 return;
             }
 
-            const t = data.tournament;
-            const teams = data.approved_teams || [];
             const approvedCount = teams.length;
             const maxTeams = t.max_teams || 16;
             const isFull = approvedCount >= maxTeams || t.registration_status === 'FULL';
@@ -438,9 +438,9 @@ const App = {
                         ${teams.length === 0 ? `
                             <div style="color: var(--text-muted); font-size: 0.9rem; grid-column: 1 / -1;">No approved teams yet. Register your team on Discord!</div>
                         ` : teams.map(tm => `
-                            <div style="display: flex; align-items: center; gap: 0.75rem; background: rgba(255,255,255,0.04); padding: 0.6rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                            <div style="display: flex; align-items: center; gap: 0.75rem; background: rgba(255,255,255,0.04); padding: 0.6rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card); cursor: pointer;" onclick="App.showTeamProfileModal('${this.escapeHtml(tm.slug || tm.public_id || tm.team_name || '')}')">
                                 <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 28px; height: 28px; border-radius: 6px; object-fit: cover;">
-                                <div style="font-weight: 600; font-size: 0.9rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(tm.name)}</div>
+                                <div style="font-weight: 600; font-size: 0.9rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(tm.name || tm.team_name)}</div>
                             </div>
                         `).join('')}
                     </div>
@@ -465,7 +465,7 @@ const App = {
 
         let teams = [];
         try {
-            teams = await Api.getApprovedTeams('');
+            teams = await Api.getTeams();
         } catch (e) {
             console.warn('Error fetching teams:', e);
         }
@@ -489,7 +489,7 @@ const App = {
                         <p style="color: var(--text-secondary); margin-top: 0.5rem;">Be the first to register your roster on our Discord server!</p>
                     </div>
                 ` : teams.map(tm => `
-                    <div class="glass-panel" style="padding: 1.5rem; display: flex; align-items: center; gap: 1rem; cursor: pointer; transition: transform 0.2s ease;" onclick="App.showTeamProfileModal(${tm.team_id})">
+                    <div class="glass-panel" style="padding: 1.5rem; display: flex; align-items: center; gap: 1rem; cursor: pointer; transition: transform 0.2s ease;" onclick="App.showTeamProfileModal('${this.escapeHtml(tm.slug || tm.public_id || tm.team_id || tm.name)}')">
                         <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 54px; height: 54px; border-radius: var(--radius-sm); object-fit: cover; border: 2px solid var(--border-card);">
                         <div>
                             <h3 style="font-family: var(--font-heading); font-size: 1.2rem; color: #fff;">${this.escapeHtml(tm.name)}</h3>
@@ -504,7 +504,7 @@ const App = {
         `;
     },
 
-    async showTeamProfileModal(teamId) {
+    async showTeamProfileModal(teamIdentifier) {
         this.showModal(`
             <div style="text-align: center; padding: 2rem;">
                 <div class="spinner" style="margin: 0 auto 1rem;"></div>
@@ -513,8 +513,9 @@ const App = {
         `);
 
         try {
-            const data = await Api.getTeamProfile(teamId);
-            if (!data || !data.team) {
+            const data = await Api.getTeamProfile(teamIdentifier);
+            const tm = (data && data.team) ? data.team : data;
+            if (!data || !tm || (!tm.name && !tm.team_id)) {
                 this.showModal(`
                     <div style="text-align: center; padding: 2rem;">
                         <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Team Not Found</h3>
@@ -523,9 +524,8 @@ const App = {
                 return;
             }
 
-            const tm = data.team;
-            const members = data.members || [];
-            const stats = data.stats || { matches_played: 0, wins: 0, losses: 0 };
+            const members = (data && data.members) ? data.members : ((data && data.roster) ? data.roster : (tm.roster || []));
+            const stats = (data && data.stats) ? data.stats : (tm.stats || { matches_played: 0, wins: 0, losses: 0 });
 
             this.showModal(`
                 <div style="max-width: 650px; margin: 0 auto;">
@@ -601,7 +601,7 @@ const App = {
                         <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Players Found</h3>
                     </div>
                 ` : players.map(p => `
-                    <div class="glass-panel" style="padding: 1.25rem; display: flex; align-items: center; gap: 1rem; cursor: pointer;" onclick="App.showPlayerProfileModal('${p.public_id || p.discord_id}')">
+                    <div class="glass-panel" style="padding: 1.25rem; display: flex; align-items: center; gap: 1rem; cursor: pointer;" onclick="App.showPlayerProfileModal('${this.escapeHtml(p.public_id || p.discord_id || p.ign || p.player_id || '')}')">
                         <img src="${PLAYER_PLACEHOLDER_AVATAR}" style="width: 46px; height: 46px; border-radius: 50%; border: 2px solid var(--border-card);">
                         <div>
                             <div style="font-weight: 700; color: #fff; font-size: 1.05rem;">${this.escapeHtml(p.display_name)}</div>

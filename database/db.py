@@ -1404,10 +1404,16 @@ def _get_tournament_by_slug_sync(slug: str) -> dict | None:
     """Synchronously fetch single tournament details by slug or title."""
     with _get_connection() as conn:
         cursor = conn.cursor()
+        clean = (slug or "").strip().lower()
+        clean_dash = clean.replace(" ", "-")
         cursor.execute("""
             SELECT * FROM tournaments 
-            WHERE LOWER(slug) = LOWER(?) OR LOWER(title) = LOWER(?) OR CAST(tournament_id AS TEXT) = ?;
-        """, (slug, slug, slug))
+            WHERE LOWER(slug) = ? 
+               OR LOWER(title) = ? 
+               OR LOWER(REPLACE(title, ' ', '-')) = ?
+               OR LOWER(REPLACE(slug, ' ', '-')) = ?
+               OR CAST(tournament_id AS TEXT) = ?;
+        """, (clean, clean, clean_dash, clean_dash, clean))
         row = cursor.fetchone()
         if not row:
             return None
@@ -2072,10 +2078,18 @@ def _get_public_matches_sync() -> list[dict]:
     with _get_connection() as conn:
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT m.match_id, m.stage_name, m.round_number, m.team1_score, m.team2_score, m.status, m.scheduled_time,
-                   t1.name as team1_name, t1.logo_url as team1_logo,
-                   t2.name as team2_name, t2.logo_url as team2_logo,
-                   tr.title as tournament_name
+            SELECT m.match_id, m.public_match_id, m.stage_name, m.round_number, m.status, m.scheduled_time, m.lobby_info,
+                   COALESCE(m.team1_score, m.score_a, 0) as team1_score,
+                   COALESCE(m.team2_score, m.score_b, 0) as team2_score,
+                   COALESCE(m.score_a, m.team1_score, 0) as score_a,
+                   COALESCE(m.score_b, m.team2_score, 0) as score_b,
+                   COALESCE(t1.name, 'TBD') as team1_name,
+                   COALESCE(t1.name, 'TBD') as team_a_name,
+                   t1.logo_url as team1_logo,
+                   COALESCE(t2.name, 'TBD') as team2_name,
+                   COALESCE(t2.name, 'TBD') as team_b_name,
+                   t2.logo_url as team2_logo,
+                   COALESCE(tr.title, 'GEN Esports') as tournament_name
             FROM matches m
             LEFT JOIN teams t1 ON m.team1_id = t1.team_id
             LEFT JOIN teams t2 ON m.team2_id = t2.team_id
@@ -2083,7 +2097,13 @@ def _get_public_matches_sync() -> list[dict]:
             ORDER BY m.match_id DESC;
         """)
         rows = cursor.fetchall()
-        return [dict(row) for row in rows]
+        res = []
+        for r in rows:
+            d = dict(r)
+            if not d.get("public_match_id"):
+                d["public_match_id"] = f"GEN-M-{d['match_id']:06d}"
+            res.append(d)
+        return res
 
 async def get_public_matches() -> list[dict]:
     """Asynchronously fetch public match records."""
@@ -2483,21 +2503,96 @@ async def lock_tournament_roster_snapshot(ticket_id: int) -> bool:
     """Asynchronously lock a tournament roster snapshot."""
     return await asyncio.to_thread(_lock_tournament_roster_snapshot_sync, ticket_id)
 
+def _sync_approved_tickets_to_teams_and_players_sync(conn):
+    """Ensure approved team registrations in tickets exist in teams, players, and team_members tables."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT ticket_id, team_name, captain_discord_id, captain_name, team_logo_url FROM tickets WHERE status = 'APPROVED';")
+    approved_tickets = cursor.fetchall()
+    for tk in approved_tickets:
+        t_name = tk["team_name"]
+        cap_id = str(tk["captain_discord_id"] or "")
+        logo = tk["team_logo_url"] or ""
+
+        cursor.execute("SELECT team_id FROM teams WHERE LOWER(name) = LOWER(?);", (t_name,))
+        t_row = cursor.fetchone()
+        if not t_row:
+            clean_slug = t_name.lower().replace(" ", "-").replace("'", "").replace('"', "")
+            cursor.execute("SELECT COUNT(*) FROM teams;")
+            t_count = cursor.fetchone()[0] + 101
+            public_id = f"GEN-T-{t_count}"
+            cursor.execute("""
+                INSERT INTO teams (name, slug, public_id, logo_url, captain_discord_id, game, region, verification_status)
+                VALUES (?, ?, ?, ?, ?, 'VALORANT', 'South Asia', 'VERIFIED');
+            """, (t_name, clean_slug, public_id, logo, cap_id))
+            team_id = cursor.lastrowid
+        else:
+            team_id = t_row["team_id"]
+
+        cursor.execute("SELECT roster_id, ign, discord_id, player_role FROM roster_players WHERE ticket_id = ?;", (tk["ticket_id"],))
+        roster = cursor.fetchall()
+        for rp in roster:
+            r_ign = rp["ign"] or "Competitor"
+            r_disc = str(rp["discord_id"] or "")
+            r_role = rp["player_role"] or "Member"
+
+            cursor.execute("SELECT player_id FROM players WHERE (discord_id = ? AND discord_id != '') OR (discord_user_id = ? AND discord_user_id != '') OR LOWER(ign) = LOWER(?);", (r_disc, r_disc, r_ign))
+            p_row = cursor.fetchone()
+            if not p_row:
+                cursor.execute("SELECT COUNT(*) FROM players;")
+                p_count = cursor.fetchone()[0] + 1
+                p_pub = f"GEN-P-{p_count:06d}"
+                cursor.execute("""
+                    INSERT INTO players (ign, discord_id, discord_user_id, display_name, username, public_id, primary_game, verification_status)
+                    VALUES (?, ?, ?, ?, ?, ?, 'VALORANT', 'VERIFIED');
+                """, (r_ign, r_disc, r_disc, r_ign, r_ign, p_pub))
+                player_id = cursor.lastrowid
+            else:
+                player_id = p_row["player_id"]
+
+            cursor.execute("SELECT membership_id FROM team_members WHERE team_id = ? AND player_id = ?;", (team_id, player_id))
+            if not cursor.fetchone():
+                role_str = "CAPTAIN" if "captain" in r_role.lower() else "MEMBER"
+                cursor.execute("""
+                    INSERT INTO team_members (team_id, player_id, role, status)
+                    VALUES (?, ?, ?, 'ACTIVE');
+                """, (team_id, player_id, role_str))
+    conn.commit()
+
 def _get_player_full_profile_sync(identifier: str) -> dict | None:
     """Fetch public player profile sanitized for safety (NO Discord ID, NO phone, NO email, NO private support info)."""
     with _get_connection() as conn:
+        _sync_approved_tickets_to_teams_and_players_sync(conn)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT player_id, public_id, username, display_name, avatar_url, country, bio, primary_game, verification_status, created_at
+            SELECT player_id, public_id, username, display_name, ign, avatar_url, country, bio, primary_game, verification_status, created_at, discord_id
             FROM players 
-            WHERE LOWER(public_id) = LOWER(?) OR LOWER(username) = LOWER(?) OR CAST(player_id AS TEXT) = ? OR discord_user_id = ?;
-        """, (identifier, identifier, identifier, identifier))
+            WHERE LOWER(public_id) = LOWER(?) OR LOWER(username) = LOWER(?) OR LOWER(ign) = LOWER(?) OR CAST(player_id AS TEXT) = ? OR discord_user_id = ? OR discord_id = ?;
+        """, (identifier, identifier, identifier, identifier, identifier, identifier))
         row = cursor.fetchone()
         if not row:
+            cursor.execute("SELECT ign, discord_id FROM roster_players WHERE discord_id = ? OR LOWER(ign) = LOWER(?);", (identifier, identifier))
+            rp_row = cursor.fetchone()
+            if rp_row:
+                return {
+                    "player_id": 999,
+                    "public_id": f"GEN-P-{rp_row['discord_id']}",
+                    "display_name": rp_row["ign"],
+                    "username": rp_row["ign"],
+                    "ign": rp_row["ign"],
+                    "in_game_id": rp_row["ign"],
+                    "primary_game": "VALORANT",
+                    "primary_team": "Registered Competitor",
+                    "verification_status": "VERIFIED",
+                    "created_at": "Recent"
+                }
             return None
         
         player = dict(row)
         p_id = player["player_id"]
+
+        if not player.get("display_name"):
+            player["display_name"] = player.get("ign") or player.get("username")
+        player["in_game_id"] = player.get("ign") or player.get("display_name")
 
         # Fetch stats
         cursor.execute("SELECT * FROM player_stats WHERE player_id = ?;", (p_id,))
@@ -2510,10 +2605,6 @@ def _get_player_full_profile_sync(identifier: str) -> dict | None:
 
         player["stats"] = stats
 
-        # Fetch achievements
-        cursor.execute("SELECT title, description, badge_icon, awarded_at FROM achievements WHERE entity_type = 'PLAYER' AND entity_id = ?;", (p_id,))
-        player["achievements"] = [dict(r) for r in cursor.fetchall()]
-
         # Fetch team memberships
         cursor.execute("""
             SELECT tm.role, tm.status, t.public_id as team_public_id, t.name as team_name, t.slug as team_slug, t.logo_url as team_logo
@@ -2521,7 +2612,12 @@ def _get_player_full_profile_sync(identifier: str) -> dict | None:
             JOIN teams t ON tm.team_id = t.team_id
             WHERE tm.player_id = ? AND tm.status = 'ACTIVE';
         """, (p_id,))
-        player["teams"] = [dict(r) for r in cursor.fetchall()]
+        teams = [dict(r) for r in cursor.fetchall()]
+        player["teams"] = teams
+        if teams:
+            player["primary_team"] = teams[0]["team_name"]
+        else:
+            player["primary_team"] = "Free Agent"
 
         return player
 
@@ -2532,9 +2628,10 @@ async def get_player_full_profile(identifier: str) -> dict | None:
 def _get_team_full_profile_sync(identifier: str) -> dict | None:
     """Fetch public team profile sanitized for safety."""
     with _get_connection() as conn:
+        _sync_approved_tickets_to_teams_and_players_sync(conn)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT team_id, public_id, name, slug, logo_url, description, game, region, verification_status, created_at 
+            SELECT team_id, public_id, name, slug, logo_url, description, game, region, verification_status, captain_discord_id, created_at 
             FROM teams 
             WHERE LOWER(slug) = LOWER(?) OR LOWER(public_id) = LOWER(?) OR LOWER(name) = LOWER(?) OR CAST(team_id AS TEXT) = ?;
         """, (identifier, identifier, identifier, identifier))
@@ -2545,20 +2642,34 @@ def _get_team_full_profile_sync(identifier: str) -> dict | None:
         team = dict(row)
         t_id = team["team_id"]
 
-        # Fetch roster
+        if team.get("captain_discord_id"):
+            cursor.execute("SELECT display_name, ign FROM players WHERE discord_id = ? OR discord_user_id = ?;", (team["captain_discord_id"], team["captain_discord_id"]))
+            c_row = cursor.fetchone()
+            if c_row:
+                team["captain_name"] = c_row["display_name"] or c_row["ign"]
+
         cursor.execute("""
-            SELECT tm.role, p.public_id, p.display_name, p.username, p.avatar_url
+            SELECT tm.role, p.public_id, COALESCE(p.display_name, p.ign) as display_name, p.username, p.ign as in_game_id, p.avatar_url
             FROM team_members tm
             JOIN players p ON tm.player_id = p.player_id
             WHERE tm.team_id = ? AND tm.status = 'ACTIVE';
         """, (t_id,))
-        team["roster"] = [dict(r) for r in cursor.fetchall()]
+        roster = [dict(r) for r in cursor.fetchall()]
 
-        # Fetch achievements
+        if not roster:
+            cursor.execute("""
+                SELECT rp.player_role as role, rp.ign as display_name, rp.ign as in_game_id, rp.discord_id
+                FROM roster_players rp
+                JOIN tickets t ON rp.ticket_id = t.ticket_id
+                WHERE LOWER(t.team_name) = LOWER(?);
+            """, (team["name"],))
+            roster = [dict(r) for r in cursor.fetchall()]
+
+        team["roster"] = roster
+
         cursor.execute("SELECT title, description, badge_icon, awarded_at FROM achievements WHERE entity_type = 'TEAM' AND entity_id = ?;", (t_id,))
         team["achievements"] = [dict(r) for r in cursor.fetchall()]
 
-        # Fetch tournament history
         cursor.execute("""
             SELECT DISTINCT tournament_name, status, created_at 
             FROM tickets 
@@ -2566,7 +2677,27 @@ def _get_team_full_profile_sync(identifier: str) -> dict | None:
         """, (team["name"],))
         team["tournament_history"] = [dict(r) for r in cursor.fetchall()]
 
-        return team
+        stats = {"matches_played": 0, "wins": 0, "losses": 0}
+        cursor.execute("""
+            SELECT COUNT(*) as mp,
+                   SUM(CASE WHEN winner_id = ? THEN 1 ELSE 0 END) as w
+            FROM matches
+            WHERE (team1_id = ? OR team2_id = ?) AND status = 'COMPLETED';
+        """, (t_id, t_id, t_id))
+        st_row = cursor.fetchone()
+        if st_row and st_row["mp"]:
+            mp = st_row["mp"]
+            w = st_row["w"] or 0
+            stats = {"matches_played": mp, "wins": w, "losses": mp - w}
+
+        return {
+            "team": team,
+            "members": roster,
+            "roster": roster,
+            "stats": stats,
+            "achievements": team["achievements"],
+            "tournament_history": team["tournament_history"]
+        }
 
 async def get_team_full_profile(identifier: str) -> dict | None:
     """Asynchronously fetch public team profile."""
@@ -2575,13 +2706,28 @@ async def get_team_full_profile(identifier: str) -> dict | None:
 def _get_all_players_public_sync() -> list[dict]:
     """Fetch sanitized directory list of public players."""
     with _get_connection() as conn:
+        _sync_approved_tickets_to_teams_and_players_sync(conn)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT public_id, display_name, username, avatar_url, primary_game, verification_status 
-            FROM players 
-            ORDER BY player_id DESC LIMIT 50;
+            SELECT p.player_id, p.public_id, COALESCE(p.display_name, p.ign) as display_name, p.username, p.ign, p.avatar_url, p.primary_game, p.verification_status, p.created_at,
+                   COALESCE(t.name, 'Free Agent') as primary_team, p.discord_id
+            FROM players p
+            LEFT JOIN team_members tm ON p.player_id = tm.player_id AND tm.status = 'ACTIVE'
+            LEFT JOIN teams t ON tm.team_id = t.team_id
+            ORDER BY p.player_id DESC LIMIT 50;
         """)
-        return [dict(r) for r in cursor.fetchall()]
+        rows = cursor.fetchall()
+        players = []
+        seen = set()
+        for r in rows:
+            d = dict(r)
+            pid = d.get("public_id") or d.get("player_id")
+            if pid not in seen:
+                seen.add(pid)
+                if not d.get("display_name"):
+                    d["display_name"] = d.get("ign") or d.get("username") or f"Player-{pid}"
+                players.append(d)
+        return players
 
 async def get_all_players_public() -> list[dict]:
     """Asynchronously fetch public players directory."""
@@ -2590,13 +2736,28 @@ async def get_all_players_public() -> list[dict]:
 def _get_all_teams_public_sync() -> list[dict]:
     """Fetch sanitized directory list of public teams."""
     with _get_connection() as conn:
+        _sync_approved_tickets_to_teams_and_players_sync(conn)
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT public_id, name, slug, logo_url, game, region, verification_status 
+            SELECT team_id, public_id, name, slug, logo_url, game, region, verification_status, captain_discord_id 
             FROM teams 
             ORDER BY team_id DESC LIMIT 50;
         """)
-        return [dict(r) for r in cursor.fetchall()]
+        rows = cursor.fetchall()
+        teams = []
+        for r in rows:
+            t = dict(r)
+            if t.get("captain_discord_id"):
+                cursor.execute("SELECT display_name, ign FROM players WHERE discord_id = ? OR discord_user_id = ?;", (t["captain_discord_id"], t["captain_discord_id"]))
+                p_row = cursor.fetchone()
+                if p_row:
+                    t["captain_name"] = p_row["display_name"] or p_row["ign"]
+                else:
+                    t["captain_name"] = "Captain"
+            else:
+                t["captain_name"] = "Captain"
+            teams.append(t)
+        return teams
 
 async def get_all_teams_public() -> list[dict]:
     """Asynchronously fetch public teams directory."""

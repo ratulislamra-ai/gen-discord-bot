@@ -90,7 +90,11 @@ async def get_public_tournament(slug: str):
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Tournament with identifier '{slug}' was not found."
         )
-    return tournament
+    approved_teams = await get_approved_teams_by_tournament(slug)
+    return {
+        "tournament": tournament,
+        "approved_teams": approved_teams
+    }
 
 @router.get("/tournaments/{slug}/approved-teams", response_model=List[Dict[str, Any]], summary="Get Approved Teams")
 async def get_public_approved_teams(slug: str):
