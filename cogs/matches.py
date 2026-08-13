@@ -87,6 +87,76 @@ class ScoreSubmissionModal(discord.ui.Modal, title="Submit Match Result"):
             logger.error(f"Error in ScoreSubmissionModal: {e}")
             await interaction.followup.send(f"❌ Error submitting score: {str(e)}", ephemeral=True)
 
+class MatchRoomScoreSubmissionModal(discord.ui.Modal, title="Submit Match Result"):
+    score_a = discord.ui.TextInput(label="Your Team Score", placeholder="e.g. 13", required=True)
+    score_b = discord.ui.TextInput(label="Opponent Team Score", placeholder="e.g. 9", required=True)
+    evidence_url = discord.ui.TextInput(label="Screenshot Evidence URL", placeholder="https://imgur.com/... or image link", required=False)
+
+    def __init__(self, match_id: str | int):
+        super().__init__()
+        self.target_match_id = str(match_id)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            m_id = self.target_match_id
+            s_a = int(self.score_a.value.strip())
+            s_b = int(self.score_b.value.strip())
+            ev_url = self.evidence_url.value.strip() if self.evidence_url.value else ""
+
+            match_res = await submit_match_score(
+                match_id=m_id,
+                submitting_team_id=0,
+                submitting_user_id=str(interaction.user.id),
+                score_a=s_a,
+                score_b=s_b,
+                evidence_url=ev_url
+            )
+
+            if not match_res:
+                await interaction.followup.send("❌ Match not found or invalid submission.", ephemeral=True)
+                return
+
+            winner_id = None
+            if s_a > s_b:
+                winner_id = match_res.get("team1_id")
+            elif s_b > s_a:
+                winner_id = match_res.get("team2_id")
+
+            next_match_info = None
+            if winner_id:
+                with _get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE matches SET status = 'COMPLETED', winner_id = ? WHERE match_id = ?;", (winner_id, match_res["match_id"]))
+                    conn.commit()
+
+                from database.db import advance_bracket_and_create_next_match
+                next_match_info = await advance_bracket_and_create_next_match(match_res["match_id"], winner_id)
+
+                if next_match_info and next_match_info.get("team1_id") and next_match_info.get("team2_id"):
+                    try:
+                        await create_or_get_match_room_channel(interaction.guild, next_match_info["match_id"])
+                    except Exception as ex:
+                        logger.warning(f"Auto-provisioning next match room error: {ex}")
+
+            embed = discord.Embed(
+                title="🏆 Match Result Submitted",
+                description=f"**Match ID:** `{match_res.get('public_match_id') or match_res['match_id']}`\n**Scores:** `{s_a} - {s_b}`\n**Status:** Submitted for verification.",
+                color=discord.Color.green()
+            )
+            if next_match_info:
+                embed.add_field(name="Next Match Bracket Status", value=f"Advanced to Match #{next_match_info.get('public_match_id') or next_match_info['match_id']}", inline=False)
+
+            if ev_url:
+                embed.add_field(name="Screenshot Evidence", value=ev_url, inline=False)
+
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except ValueError:
+            await interaction.followup.send("❌ Please enter valid numerical scores.", ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error in MatchRoomScoreSubmissionModal: {e}")
+            await interaction.followup.send(f"❌ Error submitting score: {str(e)}", ephemeral=True)
+
 class MatchControlView(discord.ui.View):
     """Persistent View for Discord Match Channels & Rooms."""
     def __init__(self, match_id: str = ""):

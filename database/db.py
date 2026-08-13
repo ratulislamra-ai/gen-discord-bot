@@ -2898,6 +2898,69 @@ async def process_match_check_in(match_id: int, team_id: int) -> dict | None:
     """Asynchronously process team check-in."""
     return await asyncio.to_thread(_process_match_check_in_sync, match_id, team_id)
 
+def _process_player_match_check_in_sync(match_id: int | str, discord_user_id: str) -> tuple[bool, str]:
+    """Process check-in directly from a Discord player's user ID."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM matches WHERE match_id = ? OR public_match_id = ?;", (match_id, str(match_id)))
+        m_row = cursor.fetchone()
+        if not m_row:
+            return False, "❌ Match not found in database."
+
+        match = dict(m_row)
+        m_id = match["match_id"]
+        team1_id = match.get("team1_id")
+        team2_id = match.get("team2_id")
+
+        # Determine user's team ID
+        cursor.execute("""
+            SELECT tm.team_id FROM team_members tm
+            JOIN players p ON tm.player_id = p.player_id
+            WHERE (p.discord_user_id = ? OR p.discord_id = ?) AND tm.status = 'ACTIVE';
+        """, (str(discord_user_id), str(discord_user_id)))
+        user_teams = [r["team_id"] for r in cursor.fetchall()]
+
+        user_team_id = None
+        if team1_id in user_teams:
+            user_team_id = team1_id
+        elif team2_id in user_teams:
+            user_team_id = team2_id
+        else:
+            cursor.execute("SELECT team_name FROM tickets WHERE CAST(user_id AS TEXT) = ? AND status = 'APPROVED';", (str(discord_user_id),))
+            tk = cursor.fetchone()
+            if tk and tk["team_name"]:
+                cursor.execute("SELECT team_id FROM teams WHERE LOWER(name) = LOWER(?);", (tk["team_name"],))
+                t_row = cursor.fetchone()
+                if t_row:
+                    if t_row["team_id"] == team1_id:
+                        user_team_id = team1_id
+                    elif t_row["team_id"] == team2_id:
+                        user_team_id = team2_id
+
+        if not user_team_id:
+            return False, "❌ You are not authorized to check in for this match (not assigned to either team roster)."
+
+        if user_team_id == team1_id:
+            if match.get("team_a_checked_in"):
+                return True, "⚠️ Your team is already checked in."
+            cursor.execute("UPDATE matches SET team_a_checked_in = 1 WHERE match_id = ?;", (m_id,))
+        else:
+            if match.get("team_b_checked_in"):
+                return True, "⚠️ Your team is already checked in."
+            cursor.execute("UPDATE matches SET team_b_checked_in = 1 WHERE match_id = ?;", (m_id,))
+
+        cursor.execute("SELECT team_a_checked_in, team_b_checked_in FROM matches WHERE match_id = ?;", (m_id,))
+        r = cursor.fetchone()
+        if r and r[0] == 1 and r[1] == 1:
+            cursor.execute("UPDATE matches SET status = 'READY' WHERE match_id = ?;", (m_id,))
+
+        conn.commit()
+        return True, "✅ Team checked in successfully."
+
+async def process_player_match_check_in(match_id: int | str, discord_user_id: str) -> tuple[bool, str]:
+    """Asynchronously process player check-in."""
+    return await asyncio.to_thread(_process_player_match_check_in_sync, match_id, discord_user_id)
+
 def _submit_match_score_sync(match_id: int, submitting_team_id: int, submitting_user_id: str, score_a: int, score_b: int, evidence_url: str = "") -> dict | None:
     """Submit match result. Transitions status to OPPONENT_CONFIRMATION."""
     with _get_connection() as conn:
