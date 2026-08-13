@@ -69,8 +69,10 @@ class GENBot(commands.Bot):
         self.add_view(SupportPanel())
         self.add_view(SupportTicketControlView())
         self.add_view(MatchControlView())
+        from cogs.general import CommunityWelcomeView
+        self.add_view(CommunityWelcomeView())
         self.add_view(MatchCenterMainView())
-        logger.info("Registered persistent UI views including MatchCenterMainView, SupportPanel, SupportTicketControlView, and MatchControlView.")
+        logger.info("Registered persistent UI views including CommunityWelcomeView, MatchCenterMainView, SupportPanel, SupportTicketControlView, and MatchControlView.")
 
         # 3. Load extension cogs
         logger.info("Loading bot extensions (cogs)...")

@@ -50,6 +50,35 @@ async def submit_match_score_api(match_id: int, payload: Dict[str, Any]):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
     return {"message": "Score submitted! Awaiting opponent confirmation.", "match": match}
 
+@router.post("/matches/{match_id}/submit-result-multipart", summary="Submit Match Result with Direct Screenshot Upload")
+async def submit_match_score_multipart_api(
+    match_id: int,
+    score_a: int = Form(...),
+    score_b: int = Form(...),
+    submitting_team_id: int = Form(0),
+    submitting_user_id: str = Form(""),
+    file: UploadFile = File(None)
+):
+    """Submit match result with direct image file upload."""
+    evidence_url = ""
+    if file:
+        file_bytes = await file.read()
+        if len(file_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File size exceeds maximum allowed limit of 10 MB.")
+
+        ext = file.filename.lower().split(".")[-1] if "." in file.filename else ""
+        if ext not in ["png", "jpg", "jpeg", "webp"]:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only PNG, JPG, JPEG, and WEBP image files are allowed.")
+
+        from utils.match_evidence_storage import save_match_evidence
+        _, relative_url = save_match_evidence(file_bytes, file.filename, match_id)
+        evidence_url = relative_url
+
+    match = await submit_match_score(match_id, submitting_team_id, submitting_user_id, score_a, score_b, evidence_url)
+    if not match:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Match not found.")
+    return {"message": "Score & evidence submitted successfully!", "match": match, "evidence_url": evidence_url}
+
 @router.post("/matches/{match_id}/confirm-result", summary="Opponent Confirm or Dispute Match Score")
 async def confirm_match_score_api(match_id: int, payload: Dict[str, Any]):
     """Confirm or dispute opponent match score submission."""
@@ -66,7 +95,7 @@ async def confirm_match_score_api(match_id: int, payload: Dict[str, Any]):
 async def get_public_config():
     """Return public platform configuration (e.g. Discord invite URL)."""
     return {
-        "discord_invite_url": settings.DISCORD_INVITE_URL or "https://discord.gg/G568r5MFqB"
+        "discord_invite_url": settings.DISCORD_INVITE_URL or "https://discord.gg/genesports"
     }
 
 @router.get("/tournaments", response_model=List[Dict[str, Any]], summary="Get Detailed Tournament List")

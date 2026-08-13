@@ -409,14 +409,30 @@ class SupportTicketControlView(discord.ui.View):
 
                 await save_support_transcript(self.case_id, transcript_text)
                 await close_support_ticket(self.case_id, str(sel_int.user.id), res_val, "Closed by staff request")
-                await sel_int.followup.send(f"🔒 Case `{self.case_id}` marked as **{res_val}**. Archiving channel...")
+                
+                embed_cleanup = discord.Embed(
+                    title="🧹 TICKET CLEANUP PROMPT",
+                    description=f"Case `{self.case_id}` has been marked as **{res_val}**.\n\nDelete this ticket channel now or keep it for audit?",
+                    color=discord.Color.gold()
+                )
+                class TicketCleanupConfirmView(discord.ui.View):
+                    def __init__(self, case_id: str):
+                        super().__init__(timeout=None)
+                        self.case_id = case_id
 
-                import asyncio
-                await asyncio.sleep(3)
-                try:
-                    await sel_int.channel.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting channel: {e}")
+                    @discord.ui.button(label="DELETE", style=discord.ButtonStyle.danger, emoji="🗑️", custom_id=f"ticket_cleanup_delete:{self.case_id}")
+                    async def delete_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+                        await interaction.response.send_message("🗑️ Deleting ticket channel...", ephemeral=True)
+                        try:
+                            await interaction.channel.delete()
+                        except Exception as ex:
+                            logger.error(f"Error deleting ticket channel: {ex}")
+
+                    @discord.ui.button(label="KEEP", style=discord.ButtonStyle.secondary, emoji="⏳", custom_id=f"ticket_cleanup_keep:{self.case_id}")
+                    async def keep_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+                        await interaction.response.send_message("⏳ Ticket channel retained for audit logs.", ephemeral=True)
+
+                await sel_int.followup.send(embed=embed_cleanup, view=TicketCleanupConfirmView(self.case_id))
 
         await interaction.response.send_message("Select close resolution category:", view=CloseChoiceView(ticket["case_id"]), ephemeral=True)
 

@@ -33,6 +33,8 @@ class TestEsportsSystem(unittest.TestCase):
             
             # 1. Clear test tables
             cursor.execute("DELETE FROM team_invitations;")
+            cursor.execute("DELETE FROM team_members;")
+            cursor.execute("DELETE FROM players;")
             cursor.execute("DELETE FROM roster_players;")
             cursor.execute("DELETE FROM tickets;")
             cursor.execute("DELETE FROM matches;")

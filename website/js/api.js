@@ -15,7 +15,7 @@ const Api = {
         } catch (err) {
             console.error('Failed to fetch public config:', err);
             return {
-                discord_invite_url: 'https://discord.gg/G568r5MFqB'
+                discord_invite_url: 'https://discord.gg/genesports'
             };
         }
     },
@@ -396,6 +396,21 @@ const Api = {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
             body: JSON.stringify(data)
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP error ${res.status}`);
+        }
+        return await res.json();
+    },
+
+    /**
+     * Submit match score & evidence file via Public/Admin API (multipart/form-data)
+     */
+    async submitMatchScoreMultipart(matchId, formData) {
+        const res = await fetch(`${API_BASE}/public/matches/${matchId}/submit-result-multipart`, {
+            method: 'POST',
+            body: formData
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));

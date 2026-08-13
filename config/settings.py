@@ -25,8 +25,21 @@ GEN_API_KEY = os.getenv("GEN_API_KEY", "")
 CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8000")
 CORS_ORIGINS = [origin.strip() for origin in CORS_ORIGINS_RAW.split(",") if origin.strip()]
 
-# Discord Server Invite URL
-DISCORD_INVITE_URL = os.getenv("DISCORD_INVITE_URL", "https://discord.gg/G568r5MFqB")
+# Discord Server & Community Configuration
+DISCORD_INVITE_URL = os.getenv("DISCORD_INVITE_URL", "https://discord.gg/genesports")
+DISCORD_SERVER_ID = os.getenv("DISCORD_SERVER_ID", "")
+
+# Configured Channel IDs
+PERMANENT_MATCH_ROOM_CHANNEL_ID = os.getenv("PERMANENT_MATCH_ROOM_CHANNEL_ID", "")
+ANNOUNCEMENT_CHANNEL_ID = os.getenv("ANNOUNCEMENT_CHANNEL_ID", "")
+WELCOME_CHANNEL_ID = os.getenv("WELCOME_CHANNEL_ID", "")
+
+# Configured Role IDs
+PLAYER_ROLE_ID = os.getenv("PLAYER_ROLE_ID", "")
+TEAM_CAPTAIN_ROLE_ID = os.getenv("TEAM_CAPTAIN_ROLE_ID", "")
+ORGANIZER_ROLE_ID = os.getenv("ORGANIZER_ROLE_ID", "")
+SPECTATOR_ROLE_ID = os.getenv("SPECTATOR_ROLE_ID", "")
+COMMUNITY_ROLE_ID = os.getenv("COMMUNITY_ROLE_ID", "")
 
 # SQLite Database Location
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "..", "tournament.db"))

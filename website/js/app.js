@@ -94,19 +94,10 @@ const App = {
     },
 
     openDiscordInvite() {
-        if (this.discordInviteUrl && this.discordInviteUrl.startsWith('http')) {
-            window.open(this.discordInviteUrl, '_blank', 'noopener');
-        } else {
-            this.showModal(`
-                <div style="text-align: center; padding: 1.5rem;">
-                    <div style="font-size: 3rem; margin-bottom: 1rem; color: var(--accent-gold);">💬</div>
-                    <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 0.75rem;">Discord Server Invite</h3>
-                    <p style="color: var(--text-secondary); line-height: 1.6; font-size: 0.95rem;">
-                        The GEN Esports Discord server invite link is currently being updated. Please check back shortly.
-                    </p>
-                </div>
-            `);
-        }
+        const url = (this.discordInviteUrl && this.discordInviteUrl.startsWith('http')) 
+            ? this.discordInviteUrl 
+            : 'https://discord.gg/genesports';
+        window.open(url, '_blank', 'noopener');
     },
 
     bindEvents() {
