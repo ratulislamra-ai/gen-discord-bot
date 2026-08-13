@@ -3784,6 +3784,53 @@ async def get_player_upcoming_matches(discord_user_id: str) -> list[dict]:
     """Asynchronously fetch upcoming matches for a player."""
     return await asyncio.to_thread(_get_player_upcoming_matches_sync, discord_user_id)
 
+def _get_player_assigned_upcoming_matches_sync(discord_user_id: str) -> list[dict]:
+    """Fetch all uncompleted/upcoming matches assigned to the player's team."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT tm.team_id, t.name as team_name
+            FROM team_members tm
+            JOIN players p ON tm.player_id = p.player_id
+            JOIN teams t ON tm.team_id = t.team_id
+            WHERE (p.discord_user_id = ? OR p.discord_id = ?) AND tm.status = 'ACTIVE';
+        """, (str(discord_user_id), str(discord_user_id)))
+        teams = cursor.fetchall()
+        team_ids = [t["team_id"] for t in teams]
+
+        if not team_ids:
+            cursor.execute("SELECT team_name FROM tickets WHERE CAST(user_id AS TEXT) = ? AND status = 'APPROVED';", (str(discord_user_id),))
+            tks = cursor.fetchall()
+            for tk in tks:
+                if tk["team_name"]:
+                    cursor.execute("SELECT team_id FROM teams WHERE LOWER(name) = LOWER(?);", (tk["team_name"],))
+                    t_row = cursor.fetchone()
+                    if t_row and t_row["team_id"] not in team_ids:
+                        team_ids.append(t_row["team_id"])
+
+        if not team_ids:
+            return []
+
+        placeholders = ",".join("?" for _ in team_ids)
+        query = f"""
+            SELECT m.*, 
+                   t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE (m.team1_id IN ({placeholders}) OR m.team2_id IN ({placeholders}))
+              AND m.status NOT IN ('COMPLETED', 'CANCELLED')
+            ORDER BY m.scheduled_time ASC, m.match_id DESC;
+        """
+        params = team_ids + team_ids
+        cursor.execute(query, params)
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_player_assigned_upcoming_matches(discord_user_id: str) -> list[dict]:
+    """Asynchronously fetch all upcoming matches assigned to a player."""
+    return await asyncio.to_thread(_get_player_assigned_upcoming_matches_sync, discord_user_id)
+
 def _add_player_to_team_roster_sync(team_id: int, target_discord_id: str, username: str = "", display_name: str = "", role: str = "PLAYER") -> dict:
     """Add a player to team roster with server-side validation."""
     with _get_connection() as conn:

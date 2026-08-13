@@ -12,10 +12,12 @@ from database.db import (
     get_user_team_membership,
     get_player_current_match,
     get_player_upcoming_matches,
+    get_player_assigned_upcoming_matches,
     get_match_by_channel_id,
     get_uncompleted_matches,
     save_match_discord_channel,
     process_player_match_check_in,
+    _get_team_roster_discord_ids_sync,
     add_player_to_team_roster,
     remove_player_from_team_roster,
     lock_team_roster,
@@ -460,7 +462,93 @@ class MatchCenterMainView(discord.ui.View):
                 return ch_match
         return await get_player_current_match(str(interaction.user.id))
 
-    @discord.ui.button(label="MY MATCH", style=discord.ButtonStyle.primary, emoji="🎮", custom_id="gen_match_center:my_match", row=0)
+    @discord.ui.button(label="CREATE YOUR MATCH ROOM", style=discord.ButtonStyle.success, emoji="🎮", custom_id="gen_match_center:create_room", row=0)
+    async def create_room_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        try:
+            matches = await get_player_assigned_upcoming_matches(str(interaction.user.id))
+            if not matches:
+                await interaction.followup.send("❌ You don't currently have an assigned upcoming match.", ephemeral=True)
+                return
+
+            if len(matches) == 1:
+                await self._process_match_room_creation(interaction, matches[0])
+            else:
+                class MatchSelectDropdown(discord.ui.Select):
+                    def __init__(self, match_list: list[dict], parent_view):
+                        self.parent_view = parent_view
+                        options = []
+                        for m in match_list[:25]:
+                            pm_id = m.get("public_match_id") or f"GEN-M-{m['match_id']:06d}"
+                            t1 = m.get("team1_name") or "TBD"
+                            t2 = m.get("team2_name") or "TBD"
+                            s_time = format_dhaka_time(m.get("scheduled_time"))
+                            options.append(discord.SelectOption(
+                                label=f"{pm_id}: {t1} vs {t2}",
+                                value=str(m["match_id"]),
+                                description=f"{s_time} | Status: {m.get('status', 'SCHEDULED')}"
+                            ))
+                        super().__init__(placeholder="🎮 Select your match to open Match Room...", options=options)
+
+                    async def callback(self, sel_interaction: discord.Interaction):
+                        await sel_interaction.response.defer(ephemeral=True)
+                        chosen_id = int(self.values[0])
+                        chosen_m = next((item for item in matches if item["match_id"] == chosen_id), None)
+                        if chosen_m:
+                            await self.parent_view._process_match_room_creation(sel_interaction, chosen_m)
+
+                class MatchSelectView(discord.ui.View):
+                    def __init__(self, match_list: list[dict], parent_view):
+                        super().__init__(timeout=120)
+                        self.add_item(MatchSelectDropdown(match_list, parent_view))
+
+                embed = discord.Embed(
+                    title="🎮 SELECT YOUR MATCH",
+                    description="Select which assigned match room you want to create or open:",
+                    color=discord.Color.from_rgb(0, 240, 255)
+                )
+                await interaction.followup.send(embed=embed, view=MatchSelectView(matches, self), ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error in create_room_button: {e}")
+            await interaction.followup.send("❌ Error processing match room creation.", ephemeral=True)
+
+    async def _process_match_room_creation(self, interaction: discord.Interaction, m: dict):
+        """Internal helper to create or retrieve existing match room and post panel."""
+        ch_id = m.get("discord_channel_id")
+        match_id = m["match_id"]
+        pm_id = m.get("public_match_id") or f"GEN-M-{match_id:06d}"
+
+        if ch_id and interaction.guild:
+            existing_ch = interaction.guild.get_channel(int(ch_id))
+            if existing_ch and isinstance(existing_ch, discord.TextChannel):
+                embed = discord.Embed(
+                    title="🏠 Your Match Room Already Exists",
+                    description=f"Your team's match room for **Match #{pm_id}** is already active!\n\n💬 **Click to enter:** {existing_ch.mention}",
+                    color=discord.Color.gold()
+                )
+                await interaction.followup.send(embed=embed, ephemeral=True)
+                return
+
+        from cogs.matches import create_or_get_match_room_channel
+        ok, msg, chs = await create_or_get_match_room_channel(interaction.guild, match_id)
+        if not ok:
+            await interaction.followup.send(f"❌ {msg}", ephemeral=True)
+            return
+
+        shared_text_ch = chs.get("shared_text")
+        if shared_text_ch and isinstance(shared_text_ch, discord.TextChannel):
+            await post_match_room_center_panel(shared_text_ch, m)
+
+            embed = discord.Embed(
+                title="✅ Your Match Room is Ready!",
+                description=f"Match Room created successfully for **Match #{pm_id}**!\n\n💬 **Click below to open your match room:** {shared_text_ch.mention}",
+                color=discord.Color.green()
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        else:
+            await interaction.followup.send(f"✅ {msg}", ephemeral=True)
+
+    @discord.ui.button(label="MY MATCH", style=discord.ButtonStyle.primary, emoji="🎮", custom_id="gen_match_center:my_match", row=1)
     async def my_match_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -493,7 +581,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in my_match_button: {e}")
             await interaction.followup.send("❌ Unable to load match information right now. Please try again.", ephemeral=True)
 
-    @discord.ui.button(label="SCHEDULE", style=discord.ButtonStyle.secondary, emoji="🕐", custom_id="gen_match_center:schedule", row=0)
+    @discord.ui.button(label="SCHEDULE", style=discord.ButtonStyle.secondary, emoji="🕐", custom_id="gen_match_center:schedule", row=1)
     async def schedule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -535,7 +623,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in schedule_button: {e}")
             await interaction.followup.send("❌ Unable to load match schedule right now. Please try again.", ephemeral=True)
 
-    @discord.ui.button(label="OPPONENT", style=discord.ButtonStyle.secondary, emoji="⚔️", custom_id="gen_match_center:opponent", row=1)
+    @discord.ui.button(label="OPPONENT", style=discord.ButtonStyle.secondary, emoji="⚔️", custom_id="gen_match_center:opponent", row=2)
     async def opponent_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -568,7 +656,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in opponent_button: {e}")
             await interaction.followup.send("❌ Unable to load opponent information right now.", ephemeral=True)
 
-    @discord.ui.button(label="LOBBY INFO", style=discord.ButtonStyle.secondary, emoji="🔐", custom_id="gen_match_center:lobby_info", row=1)
+    @discord.ui.button(label="LOBBY INFO", style=discord.ButtonStyle.secondary, emoji="🔐", custom_id="gen_match_center:lobby_info", row=2)
     async def lobby_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -621,7 +709,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in lobby_info_button: {e}")
             await interaction.followup.send("❌ Unable to load lobby information right now.", ephemeral=True)
 
-    @discord.ui.button(label="MATCH INFO", style=discord.ButtonStyle.secondary, emoji="📋", custom_id="gen_match_center:match_info", row=2)
+    @discord.ui.button(label="MATCH INFO", style=discord.ButtonStyle.secondary, emoji="📋", custom_id="gen_match_center:match_info", row=3)
     async def match_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -654,7 +742,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in match_info_button: {e}")
             await interaction.followup.send("❌ Unable to load match details right now.", ephemeral=True)
 
-    @discord.ui.button(label="SUBMIT SCORE", style=discord.ButtonStyle.primary, emoji="📝", custom_id="gen_match_center:submit_score", row=2)
+    @discord.ui.button(label="SUBMIT SCORE", style=discord.ButtonStyle.primary, emoji="📝", custom_id="gen_match_center:submit_score", row=3)
     async def submit_score_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
             m = await self._get_active_match(interaction)
@@ -669,7 +757,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in submit_score_button: {e}")
             await interaction.response.send_message("❌ Error opening score submission modal.", ephemeral=True)
 
-    @discord.ui.button(label="CHECK-IN", style=discord.ButtonStyle.success, emoji="✅", custom_id="gen_match_center:check_in", row=3)
+    @discord.ui.button(label="CHECK-IN", style=discord.ButtonStyle.success, emoji="✅", custom_id="gen_match_center:check_in", row=4)
     async def check_in_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -684,7 +772,7 @@ class MatchCenterMainView(discord.ui.View):
             logger.error(f"Error in check_in_button: {e}")
             await interaction.followup.send("❌ Error processing check-in.", ephemeral=True)
 
-    @discord.ui.button(label="REFRESH", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="gen_match_center:refresh", row=3)
+    @discord.ui.button(label="REFRESH", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="gen_match_center:refresh", row=4)
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
@@ -714,6 +802,25 @@ class MatchCenterCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
+    @app_commands.command(name="setup-match-room", description="[Admin] Install permanent public Match Room Lobby panel into channel.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def setup_match_room_cmd(self, interaction: discord.Interaction):
+        """Admin command to post permanent public Match Room Lobby panel."""
+        embed = discord.Embed(
+            title="🏆 GEN ESPORTS\nMATCH ROOM LOBBY",
+            description=(
+                "Welcome to **GEN Esports**. Click **🎮 CREATE YOUR MATCH ROOM** below to automatically generate your private match room, text channels, and voice channels.\n\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            ),
+            color=discord.Color.from_rgb(0, 240, 255)
+        )
+        embed.add_field(name="🎮 CREATE YOUR MATCH ROOM", value="Auto-detects your assigned match & creates your room.", inline=False)
+        embed.set_footer(text="GEN Esports Competitive Management Engine • Public Match Lobby")
+
+        view = MatchCenterMainView()
+        await interaction.channel.send(embed=embed, view=view)
+        await interaction.response.send_message("✅ Permanent Match Room Lobby panel installed successfully!", ephemeral=True)
+
     @app_commands.command(name="setup-match-center", description="[Admin] Post persistent GEN Esports Match Center panel into channel.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_match_center_cmd(self, interaction: discord.Interaction):
@@ -723,12 +830,6 @@ class MatchCenterCog(commands.Cog):
             description="Your complete tournament match control center. Use the interactive buttons below to manage your active matches, schedule, opponent roster, room access, lobby info, and submit scores.",
             color=discord.Color.from_rgb(0, 240, 255)
         )
-        embed.add_field(name="📋 MY MATCH", value="View your currently assigned active match.", inline=True)
-        embed.add_field(name="🕐 SCHEDULE", value="View upcoming match times (Asia/Dhaka).", inline=True)
-        embed.add_field(name="⚔️ OPPONENT", value="Inspect opponent team & captain info.", inline=True)
-        embed.add_field(name="🏠 MATCH ROOM", value="Access private team match channels.", inline=True)
-        embed.add_field(name="🔐 LOBBY INFO", value="Confidential lobby ID & passcode.", inline=True)
-        embed.add_field(name="📊 MATCH STATUS", value="Live match status & scores.", inline=True)
         embed.add_field(name="📝 SUBMIT SCORE", value="Submit match results & evidence.", inline=True)
         embed.add_field(name="🔄 REFRESH", value="Reload match state from database.", inline=True)
         embed.set_footer(text="GEN Esports Competitive Management Engine • Persistent Panel")
