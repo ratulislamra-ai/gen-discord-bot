@@ -12,6 +12,9 @@ from database.db import (
     get_user_team_membership,
     get_player_current_match,
     get_player_upcoming_matches,
+    get_match_by_channel_id,
+    get_uncompleted_matches,
+    save_match_discord_channel,
     add_player_to_team_roster,
     remove_player_from_team_roster,
     lock_team_roster,
@@ -339,16 +342,133 @@ def format_dhaka_time(timestamp_str: str | None) -> str:
     except Exception:
         return str(timestamp_str)
 
+class MatchRoomSelect(discord.ui.Select):
+    """Dropdown menu to select a database match to bind to current channel."""
+    def __init__(self, matches: list[dict]):
+        options = []
+        for m in matches[:25]:
+            pm_id = m.get("public_match_id") or f"GEN-M-{m['match_id']:06d}"
+            t1 = m.get("team1_name") or "TBD"
+            t2 = m.get("team2_name") or "TBD"
+            tr_title = m.get("tournament_name") or "Tournament"
+            options.append(discord.SelectOption(
+                label=f"{pm_id} — {t1} vs {t2}",
+                value=str(m["match_id"]),
+                description=f"{tr_title} | Status: {m.get('status', 'SCHEDULED')}"
+            ))
+        super().__init__(placeholder="Select the database match to bind to this channel...", options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        chosen_match_id = int(self.values[0])
+        ch_id = str(interaction.channel.id)
+        guild_id = str(interaction.guild.id) if interaction.guild else None
+
+        # Fetch match details from DB
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT m.*, 
+                       t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+                FROM matches m
+                LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+                LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+                LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+                WHERE m.match_id = ?;
+            """, (chosen_match_id,))
+            m = cursor.fetchone()
+            if not m:
+                await interaction.followup.send("❌ Match not found in database.", ephemeral=True)
+                return
+            m = dict(m)
+
+        existing_ch = m.get("discord_channel_id")
+        if existing_ch and str(existing_ch) != ch_id:
+            # Match is already connected to another channel
+            warn_embed = discord.Embed(
+                title="⚠️ Match Room Already Exists",
+                description=f"This match is already connected to <#{existing_ch}>.\n\nDo you want to rebind it to **#{interaction.channel.name}**?",
+                color=discord.Color.gold()
+            )
+
+            class RebindConfirmView(discord.ui.View):
+                def __init__(self, m_id: int, new_ch: str, g_id: str | None, match_dict: dict):
+                    super().__init__(timeout=120)
+                    self.m_id = m_id
+                    self.new_ch = new_ch
+                    self.g_id = g_id
+                    self.match_dict = match_dict
+
+                @discord.ui.button(label="REBIND TO THIS CHANNEL", style=discord.ButtonStyle.danger, emoji="⚠️")
+                async def confirm_rebind(self, rebind_int: discord.Interaction, btn: discord.ui.Button):
+                    await rebind_int.response.defer(ephemeral=True)
+                    await save_match_discord_channel(self.m_id, self.new_ch, self.g_id)
+                    await post_match_room_center_panel(rebind_int.channel, self.match_dict)
+                    await rebind_int.followup.send(f"✅ Rebound Match **#{self.match_dict.get('public_match_id') or self.m_id}** to <#{self.new_ch}>!", ephemeral=True)
+
+                @discord.ui.button(label="USE EXISTING ROOM", style=discord.ButtonStyle.secondary, emoji="🔗")
+                async def use_existing(self, exist_int: discord.Interaction, btn: discord.ui.Button):
+                    await exist_int.response.send_message(f"ℹ️ Kept existing match room: <#{existing_ch}>", ephemeral=True)
+
+            await interaction.followup.send(embed=warn_embed, view=RebindConfirmView(chosen_match_id, ch_id, guild_id, m), ephemeral=True)
+            return
+
+        # Save channel ID and guild ID in database
+        await save_match_discord_channel(chosen_match_id, ch_id, guild_id)
+
+        # Post persistent Match Center panel in current channel
+        await post_match_room_center_panel(interaction.channel, m)
+        await interaction.followup.send(f"✅ Successfully bound Match **#{m.get('public_match_id') or chosen_match_id}** to **#{interaction.channel.name}** and posted the Match Center panel!", ephemeral=True)
+
+class MatchRoomSelectView(discord.ui.View):
+    """Container view for MatchRoomSelect dropdown."""
+    def __init__(self, matches: list[dict]):
+        super().__init__(timeout=180)
+        self.add_item(MatchRoomSelect(matches))
+
+async def post_match_room_center_panel(channel: discord.TextChannel | discord.abc.GuildChannel, m: dict):
+    """Post the formatted persistent Match Room panel embed into the given channel."""
+    pm_id = m.get("public_match_id") or f"GEN-M-{m['match_id']:06d}"
+    t1 = m.get("team1_name") or "TBD"
+    t2 = m.get("team2_name") or "TBD"
+    tr_name = m.get("tournament_name") or "GEN Esports Championship"
+    s_time = format_dhaka_time(m.get("scheduled_time"))
+    status_val = m.get("status", "SCHEDULED")
+    status_icon = "🟢" if status_val == "SCHEDULED" else "🟡" if status_val == "CHECK_IN" else "🔵" if status_val == "LIVE" else "🏆" if status_val == "COMPLETED" else "🔴"
+
+    embed = discord.Embed(
+        title="🏆 GEN ESPORTS — MATCH ROOM",
+        description="━━━━━━━━━━━━━━━━━━━━",
+        color=discord.Color.from_rgb(0, 240, 255)
+    )
+    embed.add_field(name="🎮 Tournament", value=f"`{tr_name}`", inline=False)
+    embed.add_field(name="⚔️ Match", value=f"`{t1}` vs `{t2}`", inline=False)
+    embed.add_field(name="🆔 Match ID", value=f"`{pm_id}`", inline=True)
+    embed.add_field(name="🕐 Scheduled", value=f"`{s_time}`", inline=True)
+    embed.add_field(name="📊 Status", value=f"{status_icon} `{status_val}`", inline=True)
+    embed.set_footer(text="GEN Esports Match Control Engine • Persistent Control Panel")
+
+    view = MatchCenterMainView()
+    await channel.send(embed=embed, view=view)
+
 class MatchCenterMainView(discord.ui.View):
     """Persistent Control Panel for GEN Esports Match Center."""
     def __init__(self):
         super().__init__(timeout=None)
 
+    async def _get_active_match(self, interaction: discord.Interaction) -> dict | None:
+        """Fetch match associated with current channel first, or fallback to user's assigned match."""
+        if interaction.channel:
+            ch_match = await get_match_by_channel_id(str(interaction.channel.id))
+            if ch_match:
+                return ch_match
+        return await get_player_current_match(str(interaction.user.id))
+
     @discord.ui.button(label="MY MATCH", style=discord.ButtonStyle.primary, emoji="📋", custom_id="gen_match_center:my_match", row=0)
     async def my_match_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            m = await get_player_current_match(str(interaction.user.id))
+            m = await self._get_active_match(interaction)
             if not m:
                 await interaction.followup.send("❌ You currently have no active or upcoming matches assigned to your team.", ephemeral=True)
                 return
@@ -365,12 +485,12 @@ class MatchCenterMainView(discord.ui.View):
                 description=f"**Tournament:** `{m.get('tournament_name', 'Championship')}`\n**Stage / Round:** `{m.get('stage_name', 'Round 1')}`",
                 color=discord.Color.from_rgb(0, 240, 255)
             )
-            embed.add_field(name="Your Team", value=f"`{m.get('my_team_name', 'Your Team')}`", inline=True)
-            embed.add_field(name="Opponent", value=f"`{m.get('opponent_team_name', 'TBD')}`", inline=True)
+            embed.add_field(name="Your Team", value=f"`{m.get('my_team_name', m.get('team1_name', 'Team A'))}`", inline=True)
+            embed.add_field(name="Opponent", value=f"`{m.get('opponent_team_name', m.get('team2_name', 'Team B'))}`", inline=True)
             embed.add_field(name="Scheduled Time (Asia/Dhaka)", value=f"`{format_dhaka_time(m.get('scheduled_time'))}`", inline=False)
             embed.add_field(name="Match Status", value=f"`{m.get('status', 'PENDING')}`", inline=True)
             embed.add_field(name="Match Room", value=ch_link, inline=True)
-            embed.add_field(name="Check-in Status", value=f"`{m.get('my_team_name')}`: {t1_check}\n`{m.get('opponent_team_name')}`: {t2_check}", inline=False)
+            embed.add_field(name="Check-in Status", value=f"`{m.get('team1_name', 'Team A')}`: {t1_check}\n`{m.get('team2_name', 'Team B')}`: {t2_check}", inline=False)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
@@ -381,24 +501,35 @@ class MatchCenterMainView(discord.ui.View):
     async def schedule_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
+            m = await self._get_active_match(interaction)
             matches = await get_player_upcoming_matches(str(interaction.user.id))
-            if not matches:
+            if not matches and not m:
                 await interaction.followup.send("🎮 You currently have no upcoming scheduled matches.", ephemeral=True)
                 return
 
             embed = discord.Embed(
-                title="🕐 UPCOMING MATCH SCHEDULE",
+                title="🕐 MATCH SCHEDULE",
                 description="All times displayed in **Asia/Dhaka (BST)** timezone.",
                 color=discord.Color.blue()
             )
-            for m in matches[:5]:
+            if m and m.get("scheduled_time"):
                 pm_id = m.get("public_match_id") or f"{m['match_id']:06d}"
-                t1 = m.get("team1_name") or "TBD"
-                t2 = m.get("team2_name") or "TBD"
-                s_time = format_dhaka_time(m.get("scheduled_time"))
+                embed.add_field(
+                    name=f"⏰ Current Match #{pm_id} — {format_dhaka_time(m.get('scheduled_time'))}",
+                    value=f"**🎮 Tournament:** `{m.get('tournament_name', 'Tournament')}`\n**⚔️ Matchup:** `{m.get('team1_name', 'TBD')}` vs `{m.get('team2_name', 'TBD')}`\n**🏆 Stage:** `{m.get('stage_name', 'Round 1')}` | **📌 Status:** `{m.get('status')}`",
+                    inline=False
+                )
+
+            for upcoming_m in (matches or [])[:5]:
+                if m and upcoming_m["match_id"] == m["match_id"]:
+                    continue
+                pm_id = upcoming_m.get("public_match_id") or f"{upcoming_m['match_id']:06d}"
+                t1 = upcoming_m.get("team1_name") or "TBD"
+                t2 = upcoming_m.get("team2_name") or "TBD"
+                s_time = format_dhaka_time(upcoming_m.get("scheduled_time"))
                 embed.add_field(
                     name=f"⏰ {s_time} — Match #{pm_id}",
-                    value=f"**🎮 Tournament:** `{m.get('tournament_name', 'Tournament')}`\n**⚔️ Matchup:** `{t1}` vs `{t2}`\n**🏆 Stage:** `{m.get('stage_name', 'Round 1')}` | **📌 Status:** `{m.get('status')}`",
+                    value=f"**🎮 Tournament:** `{upcoming_m.get('tournament_name', 'Tournament')}`\n**⚔️ Matchup:** `{t1}` vs `{t2}`\n**🏆 Stage:** `{upcoming_m.get('stage_name', 'Round 1')}` | **📌 Status:** `{upcoming_m.get('status')}`",
                     inline=False
                 )
             await interaction.followup.send(embed=embed, ephemeral=True)
@@ -410,15 +541,15 @@ class MatchCenterMainView(discord.ui.View):
     async def opponent_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            m = await get_player_current_match(str(interaction.user.id))
-            if not m or not m.get("opponent_team_name"):
-                await interaction.followup.send("⚔️ Opponent information is not available yet for your current match.", ephemeral=True)
+            m = await self._get_active_match(interaction)
+            if not m:
+                await interaction.followup.send("⚔️ Opponent information is not available yet.", ephemeral=True)
                 return
 
-            op_name = m["opponent_team_name"]
-            op_slug = m.get("opponent_team_slug")
-            cap_name = m.get("opponent_captain_name") or "Not assigned"
-            cap_disc = m.get("opponent_captain_discord")
+            op_name = m.get("opponent_team_name") or m.get("team2_name") or "TBD / Bye"
+            op_slug = m.get("opponent_team_slug") or m.get("team2_slug")
+            cap_name = m.get("opponent_captain_name") or m.get("t2_captain_name") or "Not assigned"
+            cap_disc = m.get("opponent_captain_discord") or m.get("t2_captain_discord")
             cap_text = f"{cap_name} (<@{cap_disc}>)" if cap_disc else cap_name
 
             embed = discord.Embed(
@@ -443,46 +574,20 @@ class MatchCenterMainView(discord.ui.View):
     async def match_room_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            m = await get_player_current_match(str(interaction.user.id))
+            m = await self._get_active_match(interaction)
             if not m:
-                await interaction.followup.send("❌ You currently have no active or upcoming matches.", ephemeral=True)
+                await interaction.followup.send("❌ No match is assigned to this channel or your team.", ephemeral=True)
                 return
 
             ch_id = m.get("discord_channel_id")
-            if ch_id and interaction.guild:
-                existing_ch = interaction.guild.get_channel(int(ch_id))
-                if existing_ch:
-                    embed = discord.Embed(
-                        title="🏠 YOUR MATCH ROOM CHANNELS",
-                        description=f"**Match ID:** `{m.get('public_match_id') or m['match_id']}`\n\n💬 **Shared Match Room:** {existing_ch.mention}",
-                        color=discord.Color.green()
-                    )
-                    await interaction.followup.send(embed=embed, ephemeral=True)
-                    return
+            pm_id = m.get("public_match_id") or m["match_id"]
 
-            # Match room not created yet -> Provide Create Match Room button
-            embed = discord.Embed(
-                title="🏠 MATCH ROOM STATUS",
-                description=f"Match room for **Match #{m.get('public_match_id') or m['match_id']}** has not been created yet.",
-                color=discord.Color.gold()
-            )
-
-            class CreateRoomActionView(discord.ui.View):
-                def __init__(self, match_id: int):
-                    super().__init__(timeout=120)
-                    self.match_id = match_id
-
-                @discord.ui.button(label="CREATE MATCH ROOM", style=discord.ButtonStyle.success, emoji="🏠", custom_id="gen_match_center:create_room")
-                async def create_room_cb(self, cr_interaction: discord.Interaction, btn: discord.ui.Button):
-                    await cr_interaction.response.defer(ephemeral=True)
-                    from cogs.matches import create_or_get_match_room_channel
-                    ok, msg, chs = await create_or_get_match_room_channel(cr_interaction.guild, self.match_id)
-                    if ok:
-                        await cr_interaction.followup.send(f"✅ Match room created cleanly!\n{msg}", ephemeral=True)
-                    else:
-                        await cr_interaction.followup.send(f"❌ {msg}", ephemeral=True)
-
-            await interaction.followup.send(embed=embed, view=CreateRoomActionView(m["match_id"]), ephemeral=True)
+            if ch_id and str(interaction.channel.id) == str(ch_id):
+                await interaction.followup.send(f"✅ You are currently inside the designated Match Room (<#{ch_id}>) for Match **#{pm_id}**!", ephemeral=True)
+            elif ch_id:
+                await interaction.followup.send(f"🏠 Match **#{pm_id}** room is located at <#{ch_id}>.", ephemeral=True)
+            else:
+                await interaction.followup.send(f"🏠 Match room for Match **#{pm_id}** has not been assigned yet. Run `/match-room` in the desired channel.", ephemeral=True)
         except Exception as e:
             logger.error(f"Error in match_room_button: {e}")
             await interaction.followup.send("❌ Unable to load match room details.", ephemeral=True)
@@ -491,7 +596,7 @@ class MatchCenterMainView(discord.ui.View):
     async def lobby_info_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            m = await get_player_current_match(str(interaction.user.id))
+            m = await self._get_active_match(interaction)
             if not m:
                 await interaction.followup.send("❌ You currently have no active match.", ephemeral=True)
                 return
@@ -523,7 +628,7 @@ class MatchCenterMainView(discord.ui.View):
     async def match_status_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            m = await get_player_current_match(str(interaction.user.id))
+            m = await self._get_active_match(interaction)
             if not m:
                 await interaction.followup.send("❌ You currently have no active or upcoming matches.", ephemeral=True)
                 return
@@ -553,7 +658,7 @@ class MatchCenterMainView(discord.ui.View):
     @discord.ui.button(label="SUBMIT SCORE", style=discord.ButtonStyle.primary, emoji="📝", custom_id="gen_match_center:submit_score", row=1)
     async def submit_score_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         try:
-            m = await get_player_current_match(str(interaction.user.id))
+            m = await self._get_active_match(interaction)
             match_id_str = str(m.get("public_match_id") or m.get("match_id") or "") if m else ""
 
             from cogs.matches import ScoreSubmissionModal
@@ -569,7 +674,7 @@ class MatchCenterMainView(discord.ui.View):
     async def refresh_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            m = await get_player_current_match(str(interaction.user.id))
+            m = await self._get_active_match(interaction)
             if not m:
                 await interaction.followup.send("🔄 Match Center refreshed! No active match currently assigned.", ephemeral=True)
                 return
@@ -582,7 +687,7 @@ class MatchCenterMainView(discord.ui.View):
             )
             embed.add_field(name="Status", value=f"`{m.get('status')}`", inline=True)
             embed.add_field(name="Scheduled Time", value=f"`{format_dhaka_time(m.get('scheduled_time'))}`", inline=True)
-            embed.add_field(name="Matchup", value=f"`{m.get('team1_name')}` vs `{m.get('team2_name')}`", inline=False)
+            embed.add_field(name="Matchup", value=f"`{m.get('team1_name', 'TBD')}` vs `{m.get('team2_name', 'TBD')}`", inline=False)
 
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as e:
@@ -617,6 +722,28 @@ class MatchCenterCog(commands.Cog):
         view = MatchCenterMainView()
         await interaction.channel.send(embed=embed, view=view)
         await interaction.response.send_message("✅ Persistent Match Center panel posted successfully!", ephemeral=True)
+
+    @app_commands.command(name="match-room", description="[Admin] Bind current Discord channel as Match Room and post control panel.")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def match_room_cmd(self, interaction: discord.Interaction):
+        """Admin command to bind current channel to a database match and post Match Center UI."""
+        await interaction.response.defer(ephemeral=True)
+        try:
+            matches = await get_uncompleted_matches()
+            if not matches:
+                await interaction.followup.send("❌ No active or uncompleted matches found in database.", ephemeral=True)
+                return
+
+            embed = discord.Embed(
+                title="🏆 Select Match Room",
+                description=f"Select the database match to bind to **#{interaction.channel.name}**:\n\n*This channel (`ID: {interaction.channel.id}`) will be saved as the official Match Room.*",
+                color=discord.Color.from_rgb(0, 240, 255)
+            )
+            view = MatchRoomSelectView(matches)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception as e:
+            logger.error(f"Error in match_room_cmd: {e}")
+            await interaction.followup.send("❌ Error opening match room selector.", ephemeral=True)
 
 async def setup(bot: commands.Bot):
     """Register MatchCenterCog."""

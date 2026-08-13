@@ -785,6 +785,8 @@ def _init_db_sync():
             cursor.execute("ALTER TABLE matches ADD COLUMN swiss_round INTEGER DEFAULT 1;")
         if "discord_channel_id" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN discord_channel_id TEXT;")
+        if "guild_id" not in m_cols:
+            cursor.execute("ALTER TABLE matches ADD COLUMN guild_id TEXT;")
         if "check_in_policy" not in m_cols:
             cursor.execute("ALTER TABLE matches ADD COLUMN check_in_policy TEXT DEFAULT 'NOTIFY_STAFF';")
         if "dispute_ticket_id" not in m_cols:
@@ -3794,17 +3796,70 @@ async def lock_team_roster(team_id: int) -> bool:
     """Asynchronously lock team roster."""
     return await asyncio.to_thread(_lock_team_roster_sync, team_id)
 
-def _save_match_discord_channel_sync(match_id: int, channel_id: str) -> bool:
-    """Save associated Discord match room channel ID."""
+def _save_match_discord_channel_sync(match_id: int, channel_id: str, guild_id: str | None = None) -> bool:
+    """Save associated Discord match room channel ID and optional guild ID."""
     with _get_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE matches SET discord_channel_id = ? WHERE match_id = ?;", (str(channel_id), match_id))
+        if guild_id:
+            cursor.execute("UPDATE matches SET discord_channel_id = ?, guild_id = ? WHERE match_id = ?;", (str(channel_id), str(guild_id), match_id))
+        else:
+            cursor.execute("UPDATE matches SET discord_channel_id = ? WHERE match_id = ?;", (str(channel_id), match_id))
         conn.commit()
         return cursor.rowcount > 0
 
-async def save_match_discord_channel(match_id: int, channel_id: str) -> bool:
-    """Asynchronously save match discord channel ID."""
-    return await asyncio.to_thread(_save_match_discord_channel_sync, match_id, channel_id)
+async def save_match_discord_channel(match_id: int, channel_id: str, guild_id: str | None = None) -> bool:
+    """Asynchronously save match discord channel ID and guild ID."""
+    return await asyncio.to_thread(_save_match_discord_channel_sync, match_id, channel_id, guild_id)
+
+def _get_match_by_channel_id_sync(channel_id: str) -> dict | None:
+    """Fetch complete match details by associated Discord channel ID."""
+    if not channel_id:
+        return None
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, 
+                   t1.name as team1_name, t1.slug as team1_slug, t1.captain_player_id as t1_captain_id,
+                   t2.name as team2_name, t2.slug as team2_slug, t2.captain_player_id as t2_captain_id,
+                   tr.title as tournament_name, tr.game_type as tournament_game, tr.slug as tournament_slug,
+                   p1.display_name as t1_captain_name, p1.discord_user_id as t1_captain_discord,
+                   p2.display_name as t2_captain_name, p2.discord_user_id as t2_captain_discord
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            LEFT JOIN players p1 ON t1.captain_player_id = p1.player_id
+            LEFT JOIN players p2 ON t2.captain_player_id = p2.player_id
+            WHERE m.discord_channel_id = ?
+            ORDER BY m.match_id DESC LIMIT 1;
+        """, (str(channel_id),))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_match_by_channel_id(channel_id: str) -> dict | None:
+    """Asynchronously fetch match details by Discord channel ID."""
+    return await asyncio.to_thread(_get_match_by_channel_id_sync, channel_id)
+
+def _get_uncompleted_matches_sync() -> list[dict]:
+    """Fetch uncompleted/active matches for selection dropdowns."""
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT m.*, 
+                   t1.name as team1_name, t2.name as team2_name, tr.title as tournament_name
+            FROM matches m
+            LEFT JOIN teams t1 ON m.team1_id = t1.team_id
+            LEFT JOIN teams t2 ON m.team2_id = t2.team_id
+            LEFT JOIN tournaments tr ON m.tournament_id = tr.tournament_id
+            WHERE m.status NOT IN ('COMPLETED', 'CANCELLED')
+            ORDER BY m.scheduled_time ASC, m.match_id DESC
+            LIMIT 25;
+        """)
+        return [dict(r) for r in cursor.fetchall()]
+
+async def get_uncompleted_matches() -> list[dict]:
+    """Asynchronously fetch active/uncompleted matches."""
+    return await asyncio.to_thread(_get_uncompleted_matches_sync)
 
 def _get_team_roster_discord_ids_sync(team_id: int) -> list[str]:
     """Fetch list of Discord user IDs for active roster members and captain."""
