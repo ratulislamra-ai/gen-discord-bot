@@ -2721,7 +2721,7 @@ def _get_all_players_public_sync() -> list[dict]:
         seen = set()
         for r in rows:
             d = dict(r)
-            pid = d.get("public_id") or d.get("player_id")
+            pid = d.get("public_id") or str(d.get("player_id"))
             if pid not in seen:
                 seen.add(pid)
                 if not d.get("display_name"):
@@ -2756,6 +2756,9 @@ def _get_all_teams_public_sync() -> list[dict]:
                     t["captain_name"] = "Captain"
             else:
                 t["captain_name"] = "Captain"
+
+            cursor.execute("SELECT COUNT(*) FROM team_members WHERE team_id = ? AND status = 'ACTIVE';", (t["team_id"],))
+            t["player_count"] = cursor.fetchone()[0] or 5
             teams.append(t)
         return teams
 

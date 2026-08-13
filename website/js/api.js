@@ -59,20 +59,29 @@ const Api = {
      * Fetch single tournament by slug/title/ID
      */
     async getTournamentDetails(slug) {
+        if (!slug) return null;
         try {
             const res = await fetch(`${API_BASE}/public/tournaments/${encodeURIComponent(slug)}`);
             if (!res.ok) throw new Error(`HTTP error ${res.status}`);
-            return await res.json();
+            const data = await res.json();
+            if (data && data.tournament) {
+                return data;
+            }
+            const approved_teams = await this.getApprovedTeams(slug);
+            return { tournament: data, approved_teams };
         } catch (err) {
-            console.error(`Failed to fetch tournament ${slug}:`, err);
+            console.error(`Failed to fetch tournament details for ${slug}:`, err);
             return null;
         }
     },
 
     /**
-     * Fetch approved teams for a specific tournament
+     * Fetch approved teams for a specific tournament or all public teams
      */
     async getApprovedTeams(tournamentSlug) {
+        if (!tournamentSlug) {
+            return this.getTeams();
+        }
         try {
             const res = await fetch(`${API_BASE}/public/tournaments/${encodeURIComponent(tournamentSlug)}/approved-teams`);
             if (!res.ok) throw new Error(`HTTP error ${res.status}`);

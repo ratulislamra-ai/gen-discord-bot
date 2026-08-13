@@ -363,30 +363,45 @@ const App = {
     buildTournamentCardHtml(t) {
         const approvedCount = t.current_approved_team_count || 0;
         const maxTeams = t.max_teams || 16;
+        const percent = Math.min(100, Math.round((approvedCount / maxTeams) * 100));
         const isFull = approvedCount >= maxTeams || t.registration_status === 'FULL';
         const regBadgeClass = isFull ? 'badge-closed' : (t.registration_status === 'OPEN' ? 'badge-open' : 'badge-closed');
         const regText = isFull ? '🔴 REGISTRATION FULL' : (t.registration_status === 'OPEN' ? '🟢 REGISTRATION OPEN' : '🔴 REGISTRATION CLOSED');
 
         return `
-            <div class="tournament-card glass-panel" onclick="App.showTournamentDetailsModal('${this.escapeHtml(t.slug || t.tournament_id)}')">
-                <div class="tournament-card-header">
-                    <span class="badge ${regBadgeClass}">${regText}</span>
-                    <span class="badge badge-draft">${this.escapeHtml(t.game_type || 'ESPORTS')}</span>
+            <div class="esports-card" onclick="App.showTournamentDetailsModal('${this.escapeHtml(t.slug || t.tournament_id)}')">
+                <div class="esports-card-banner">
+                    <span class="badge ${regBadgeClass}" style="z-index: 2;">${regText}</span>
+                    <span class="badge badge-draft" style="z-index: 2;">${this.escapeHtml(t.game_type || 'ESPORTS')}</span>
                 </div>
-                <h3 class="tournament-card-title">${this.escapeHtml(t.title)}</h3>
-                <p class="tournament-card-desc">${this.escapeHtml(t.description || 'Official GEN Esports competitive tournament.')}</p>
-                <div class="tournament-card-meta">
-                    <div>
-                        <div class="meta-lbl">PRIZE POOL</div>
-                        <div class="meta-val" style="color: var(--accent-gold); font-weight: 700;">${this.escapeHtml(t.prize_info || 'TBD')}</div>
+                <div class="esports-card-body">
+                    <h3 style="font-family: var(--font-heading); font-size: 1.35rem; font-weight: 800; color: #fff; margin-bottom: 0.5rem; line-height: 1.3;">
+                        ${this.escapeHtml(t.title)}
+                    </h3>
+                    <p style="color: var(--text-secondary); font-size: 0.88rem; line-height: 1.5; margin-bottom: 1.25rem; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
+                        ${this.escapeHtml(t.description || 'Official GEN Esports competitive tournament. Register your roster and compete.')}
+                    </p>
+
+                    <div style="margin-top: auto; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.06);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <div>
+                                <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">PRIZE POOL</div>
+                                <div style="color: var(--accent-gold); font-weight: 800; font-size: 1.1rem;">${this.escapeHtml(t.prize_info || '৳500 BDT')}</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase;">ROSTERS</div>
+                                <div style="color: #fff; font-weight: 800; font-size: 0.95rem;">${approvedCount} / ${maxTeams} Teams</div>
+                            </div>
+                        </div>
+
+                        <div class="progress-track">
+                            <div class="progress-fill" style="width: ${percent}%;"></div>
+                        </div>
+
+                        <button class="btn btn-primary" style="width: 100%; margin-top: 1.25rem; padding: 0.65rem; font-size: 0.9rem;">
+                            ✨ VIEW TOURNAMENT
+                        </button>
                     </div>
-                    <div>
-                        <div class="meta-lbl">APPROVED ROSTERS</div>
-                        <div class="meta-val">${approvedCount} / ${maxTeams} Teams</div>
-                    </div>
-                </div>
-                <div style="margin-top: 1rem; text-align: right;">
-                    <span style="color: var(--accent-cyan); font-weight: 600; font-size: 0.88rem;">View Details & Roster &rarr;</span>
                 </div>
             </div>
         `;
@@ -394,9 +409,9 @@ const App = {
 
     async showTournamentDetailsModal(slug) {
         this.showModal(`
-            <div style="text-align: center; padding: 2rem;">
+            <div style="text-align: center; padding: 3rem;">
                 <div class="spinner" style="margin: 0 auto 1rem;"></div>
-                <p style="color: var(--text-secondary);">Loading tournament details...</p>
+                <p style="color: var(--text-secondary); font-weight: 600;">Loading tournament details...</p>
             </div>
         `);
 
@@ -404,11 +419,13 @@ const App = {
             const data = await Api.getTournamentDetails(slug);
             const t = (data && data.tournament) ? data.tournament : (data && data.title ? data : null);
             const teams = (data && data.approved_teams) ? data.approved_teams : [];
+
             if (!t) {
                 this.showModal(`
-                    <div style="text-align: center; padding: 2rem;">
-                        <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Tournament Not Found</h3>
+                    <div style="text-align: center; padding: 3rem;">
+                        <h3 style="font-family: var(--font-heading); color: var(--accent-red); font-size: 1.8rem;">Tournament Not Found</h3>
                         <p style="color: var(--text-secondary); margin-top: 0.5rem;">Could not load details for this tournament.</p>
+                        <button onclick="App.hideModal()" class="btn btn-secondary" style="margin-top: 1.5rem;">Close</button>
                     </div>
                 `);
                 return;
@@ -417,35 +434,73 @@ const App = {
             const approvedCount = teams.length;
             const maxTeams = t.max_teams || 16;
             const isFull = approvedCount >= maxTeams || t.registration_status === 'FULL';
+            const percent = Math.min(100, Math.round((approvedCount / maxTeams) * 100));
 
             this.showModal(`
-                <div style="max-width: 700px; margin: 0 auto;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; gap: 0.5rem;">
-                        <span class="badge ${isFull ? 'badge-closed' : 'badge-open'}">${isFull ? '🔴 FULL' : t.registration_status}</span>
-                        <span style="color: var(--accent-gold); font-weight: 700; font-size: 1.1rem;">🏆 Prize: ${this.escapeHtml(t.prize_info || 'TBD')}</span>
+                <div style="max-width: 760px; margin: 0 auto;">
+                    <div style="background: linear-gradient(135deg, rgba(15, 23, 42, 0.9), rgba(30, 41, 59, 0.8)); padding: 1.5rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; flex-wrap: wrap; gap: 0.5rem;">
+                            <div style="display: flex; gap: 0.5rem;">
+                                <span class="badge ${isFull ? 'badge-closed' : 'badge-open'}">${isFull ? '🔴 REGISTRATION FULL' : (t.registration_status === 'OPEN' ? '🟢 REGISTRATION OPEN' : '🔴 CLOSED')}</span>
+                                <span class="badge badge-draft">${this.escapeHtml(t.game_type || 'VALORANT')}</span>
+                            </div>
+                            <span style="color: var(--accent-gold); font-weight: 800; font-size: 1.25rem;">🏆 Prize: ${this.escapeHtml(t.prize_info || '৳500 BDT')}</span>
+                        </div>
+
+                        <h2 style="font-family: var(--font-heading); font-size: 2rem; font-weight: 900; color: #fff; margin-bottom: 0.5rem;">${this.escapeHtml(t.title)}</h2>
+                        <p style="color: var(--text-secondary); line-height: 1.6; font-size: 0.95rem; margin-bottom: 1rem;">${this.escapeHtml(t.description || 'Official GEN Esports competitive tournament.')}</p>
+
+                        <div style="margin-top: 1rem;">
+                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; color: var(--text-secondary); margin-bottom: 0.35rem;">
+                                <span>APPROVED TEAMS CAPACITY</span>
+                                <span>${approvedCount} / ${maxTeams} Teams (${percent}%)</span>
+                            </div>
+                            <div class="progress-track" style="height: 8px;">
+                                <div class="progress-fill" style="width: ${percent}%;"></div>
+                            </div>
+                        </div>
                     </div>
 
-                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem; margin-bottom: 0.5rem;">${this.escapeHtml(t.title)}</h2>
-                    <p style="color: var(--text-secondary); line-height: 1.6; font-size: 0.95rem; margin-bottom: 1.5rem;">${this.escapeHtml(t.description || '')}</p>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                        <div style="background: rgba(0,0,0,0.3); padding: 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                            <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700;">REGISTRATION START</div>
+                            <div style="font-weight: 700; font-size: 0.9rem; color: #fff; margin-top: 0.25rem;">📅 ${this.escapeHtml(t.registration_start || 'Immediate')}</div>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.3); padding: 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                            <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700;">REGISTRATION DEADLINE</div>
+                            <div style="font-weight: 700; font-size: 0.9rem; color: #fff; margin-top: 0.25rem;">📅 ${this.escapeHtml(t.registration_deadline || 'TBD')}</div>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.3); padding: 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                            <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700;">TOURNAMENT START</div>
+                            <div style="font-weight: 700; font-size: 0.9rem; color: #fff; margin-top: 0.25rem;">📅 ${this.escapeHtml(t.tournament_start || 'TBD')}</div>
+                        </div>
+                        <div style="background: rgba(0,0,0,0.3); padding: 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                            <div style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700;">FORMAT</div>
+                            <div style="font-weight: 700; font-size: 0.9rem; color: var(--accent-cyan); margin-top: 0.25rem;">⚔️ ${this.escapeHtml(t.format || 'Single Elimination')}</div>
+                        </div>
+                    </div>
 
                     <div style="background: rgba(0,0,0,0.3); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); margin-bottom: 1.5rem;">
-                        <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem; color: var(--accent-cyan);">📜 Tournament Rules & Format</h4>
+                        <h4 style="font-family: var(--font-heading); font-size: 1.1rem; margin-bottom: 0.75rem; color: var(--accent-cyan);">📜 Tournament Rules & Guidelines</h4>
                         <p style="color: var(--text-secondary); font-size: 0.88rem; line-height: 1.6; white-space: pre-line;">${this.escapeHtml(t.rules_text || 'Standard GEN Esports Tournament Rules apply.')}</p>
                     </div>
 
-                    <h4 style="font-family: var(--font-heading); font-size: 1.2rem; margin-bottom: 1rem;">🛡️ Approved Registered Teams (${approvedCount} / ${maxTeams})</h4>
-                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.75rem; max-height: 250px; overflow-y: auto; padding-right: 0.5rem;">
+                    <h4 style="font-family: var(--font-heading); font-size: 1.2rem; margin-bottom: 1rem; color: #fff;">🛡️ Approved Registered Teams (${approvedCount} / ${maxTeams})</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0.75rem; max-height: 250px; overflow-y: auto; padding-right: 0.5rem; margin-bottom: 1.5rem;">
                         ${teams.length === 0 ? `
-                            <div style="color: var(--text-muted); font-size: 0.9rem; grid-column: 1 / -1;">No approved teams yet. Register your team on Discord!</div>
+                            <div style="color: var(--text-muted); font-size: 0.9rem; grid-column: 1 / -1; background: rgba(0,0,0,0.2); padding: 1.5rem; text-align: center; border-radius: var(--radius-sm);">No approved teams yet. Register your team on Discord!</div>
                         ` : teams.map(tm => `
-                            <div style="display: flex; align-items: center; gap: 0.75rem; background: rgba(255,255,255,0.04); padding: 0.6rem 0.8rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card); cursor: pointer;" onclick="App.showTeamProfileModal('${this.escapeHtml(tm.slug || tm.public_id || tm.team_name || '')}')">
-                                <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 28px; height: 28px; border-radius: 6px; object-fit: cover;">
-                                <div style="font-weight: 600; font-size: 0.9rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${this.escapeHtml(tm.name || tm.team_name)}</div>
+                            <div style="display: flex; align-items: center; gap: 0.75rem; background: rgba(255,255,255,0.04); padding: 0.65rem 0.85rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card); cursor: pointer;" onclick="App.showTeamProfileModal('${this.escapeHtml(tm.slug || tm.public_id || tm.team_name || '')}')">
+                                <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 32px; height: 32px; border-radius: 6px; object-fit: cover;">
+                                <div style="overflow: hidden;">
+                                    <div style="font-weight: 700; font-size: 0.9rem; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${this.escapeHtml(tm.name || tm.team_name)}</div>
+                                    <div style="font-size: 0.75rem; color: var(--accent-gold);">👑 ${this.escapeHtml(tm.captain_name || 'Captain')}</div>
+                                </div>
                             </div>
                         `).join('')}
                     </div>
 
-                    <div style="margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-card); padding-top: 1.25rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-card); padding-top: 1.25rem;">
                         <button onclick="App.openDiscordInvite()" class="btn btn-discord">
                             💬 Register Team in Discord
                         </button>
@@ -481,22 +536,33 @@ const App = {
                 </p>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.5rem;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem;">
                 ${teams.length === 0 ? `
                     <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; grid-column: 1 / -1;">
-                        <div style="font-size: 3rem; margin-bottom: 1rem;">🛡️</div>
-                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Teams Registered</h3>
+                        <div style="font-size: 3.5rem; margin-bottom: 1rem;">🛡️</div>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.6rem;">No Teams Registered</h3>
                         <p style="color: var(--text-secondary); margin-top: 0.5rem;">Be the first to register your roster on our Discord server!</p>
                     </div>
                 ` : teams.map(tm => `
-                    <div class="glass-panel" style="padding: 1.5rem; display: flex; align-items: center; gap: 1rem; cursor: pointer; transition: transform 0.2s ease;" onclick="App.showTeamProfileModal('${this.escapeHtml(tm.slug || tm.public_id || tm.team_id || tm.name)}')">
-                        <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 54px; height: 54px; border-radius: var(--radius-sm); object-fit: cover; border: 2px solid var(--border-card);">
-                        <div>
-                            <h3 style="font-family: var(--font-heading); font-size: 1.2rem; color: #fff;">${this.escapeHtml(tm.name)}</h3>
-                            <div style="font-size: 0.82rem; color: var(--text-secondary); margin-top: 0.25rem;">
-                                👑 Captain: <span style="color: var(--accent-gold); font-weight: 600;">${this.escapeHtml(tm.captain_name || 'N/A')}</span>
+                    <div class="glass-panel team-card-hover" style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; cursor: pointer;" onclick="App.showTeamProfileModal('${this.escapeHtml(tm.slug || tm.public_id || tm.team_id)}')">
+                        <div style="display: flex; align-items: center; gap: 1rem;">
+                            <img src="${this.escapeHtml(tm.logo_url || TEAM_PLACEHOLDER_LOGO)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" style="width: 56px; height: 56px; border-radius: var(--radius-sm); object-fit: cover; border: 2px solid var(--border-card);">
+                            <div>
+                                <h3 style="font-family: var(--font-heading); font-size: 1.25rem; font-weight: 800; color: #fff;">${this.escapeHtml(tm.name)}</h3>
+                                <div style="display: flex; gap: 0.4rem; margin-top: 0.25rem;">
+                                    <span class="badge badge-draft" style="font-size: 0.7rem;">${this.escapeHtml(tm.game || 'VALORANT')}</span>
+                                    <span class="badge badge-open" style="font-size: 0.7rem;">APPROVED</span>
+                                </div>
                             </div>
-                            <div style="font-size: 0.78rem; color: var(--accent-cyan); margin-top: 0.35rem; font-weight: 600;">View Roster & Stats &rarr;</div>
+                        </div>
+
+                        <div style="background: rgba(0,0,0,0.3); padding: 0.75rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card); font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center;">
+                            <div>👑 <strong>Captain:</strong> <span style="color: var(--accent-gold);">${this.escapeHtml(tm.captain_name || 'Captain')}</span></div>
+                            <div style="color: var(--text-secondary);">👥 Roster: ${tm.player_count || 5}</div>
+                        </div>
+
+                        <div style="font-size: 0.85rem; color: var(--accent-cyan); font-weight: 700; text-align: right;">
+                            View Roster & Stats &rarr;
                         </div>
                     </div>
                 `).join('')}
@@ -504,7 +570,7 @@ const App = {
         `;
     },
 
-    async showTeamProfileModal(teamIdentifier) {
+    async showTeamProfileModal(teamId) {
         this.showModal(`
             <div style="text-align: center; padding: 2rem;">
                 <div class="spinner" style="margin: 0 auto 1rem;"></div>
@@ -513,9 +579,8 @@ const App = {
         `);
 
         try {
-            const data = await Api.getTeamProfile(teamIdentifier);
-            const tm = (data && data.team) ? data.team : data;
-            if (!data || !tm || (!tm.name && !tm.team_id)) {
+            const data = await Api.getTeamProfile(teamId);
+            if (!data || (!data.team && !data.name)) {
                 this.showModal(`
                     <div style="text-align: center; padding: 2rem;">
                         <h3 style="font-family: var(--font-heading); color: var(--accent-red);">Team Not Found</h3>
@@ -524,8 +589,9 @@ const App = {
                 return;
             }
 
-            const members = (data && data.members) ? data.members : ((data && data.roster) ? data.roster : (tm.roster || []));
-            const stats = (data && data.stats) ? data.stats : (tm.stats || { matches_played: 0, wins: 0, losses: 0 });
+            const tm = data.team || data;
+            const members = data.roster || data.members || [];
+            const stats = data.stats || { matches_played: 0, wins: 0, losses: 0 };
 
             this.showModal(`
                 <div style="max-width: 650px; margin: 0 auto;">
@@ -534,7 +600,7 @@ const App = {
                         <div>
                             <h2 style="font-family: var(--font-heading); font-size: 2rem; color: #fff;">${this.escapeHtml(tm.name)}</h2>
                             <div style="color: var(--accent-gold); font-weight: 600; font-size: 0.95rem; margin-top: 0.25rem;">
-                                👑 Captain: ${this.escapeHtml(tm.captain_name || 'N/A')}
+                                👑 Captain: ${this.escapeHtml(tm.captain_name || 'Captain')}
                             </div>
                         </div>
                     </div>
@@ -546,14 +612,16 @@ const App = {
                     </div>
 
                     <h4 style="font-family: var(--font-heading); font-size: 1.2rem; margin-bottom: 1rem;">👥 Roster Members (${members.length})</h4>
-                    <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 220px; overflow-y: auto;">
-                        ${members.map(m => `
+                    <div style="display: flex; flex-direction: column; gap: 0.5rem; max-height: 220px; overflow-y: auto; margin-bottom: 1.5rem;">
+                        ${members.length === 0 ? `
+                            <div style="color: var(--text-muted); padding: 1rem; text-align: center;">No roster members listed yet.</div>
+                        ` : members.map(m => `
                             <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.3); padding: 0.75rem 1rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
                                 <div style="display: flex; align-items: center; gap: 0.75rem;">
                                     <span style="font-size: 1.2rem;">👤</span>
                                     <div>
-                                        <div style="font-weight: 700; color: #fff;">${this.escapeHtml(m.display_name)}</div>
-                                        <div style="font-size: 0.78rem; color: var(--text-muted);">In-Game ID: ${this.escapeHtml(m.in_game_id || 'N/A')}</div>
+                                        <div style="font-weight: 700; color: #fff;">${this.escapeHtml(m.display_name || m.ign || 'Player')}</div>
+                                        <div style="font-size: 0.78rem; color: var(--text-muted);">In-Game ID: ${this.escapeHtml(m.in_game_id || m.ign || 'N/A')}</div>
                                     </div>
                                 </div>
                                 <span class="badge ${m.role === 'CAPTAIN' ? 'badge-ongoing' : 'badge-draft'}">${this.escapeHtml(m.role || 'MEMBER')}</span>
@@ -561,9 +629,7 @@ const App = {
                         `).join('')}
                     </div>
 
-                    <div style="margin-top: 1.5rem; text-align: right;">
-                        <button onclick="App.hideModal()" class="btn btn-secondary">Close</button>
-                    </div>
+                    <button onclick="App.hideModal()" class="btn btn-secondary">Close</button>
                 </div>
             `);
         } catch (err) {
@@ -579,39 +645,82 @@ const App = {
         let players = [];
         try {
             players = await Api.getPlayers();
+            this._cachedPlayers = players;
         } catch (e) {
             console.warn('Error fetching players:', e);
         }
 
         container.innerHTML = `
-            <div style="margin-bottom: 2.5rem;">
-                <div class="hero-badge">👤 PLAYER DIRECTORY</div>
-                <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
-                    REGISTERED <span class="gradient-text">COMPETITORS</span>
-                </h1>
-                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
-                    Browse verified competitive players, in-game handles, and team affiliations.
-                </p>
+            <div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 1rem;">
+                <div>
+                    <div class="hero-badge">👤 PLAYER DIRECTORY</div>
+                    <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
+                        REGISTERED <span class="gradient-text">COMPETITORS</span>
+                    </h1>
+                    <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem;">
+                        Browse verified competitive players, in-game handles, and team affiliations.
+                    </p>
+                </div>
+
+                <div style="width: 100%; max-width: 320px;">
+                    <input type="text" id="player-search-input" class="form-input" placeholder="🔍 Search player by IGN or team..." oninput="App.filterPlayersDisplay(this.value)">
+                </div>
             </div>
 
-            <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 1.25rem;">
-                ${players.length === 0 ? `
-                    <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; grid-column: 1 / -1;">
-                        <div style="font-size: 3rem; margin-bottom: 1rem;">👤</div>
-                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Players Found</h3>
-                    </div>
-                ` : players.map(p => `
-                    <div class="glass-panel" style="padding: 1.25rem; display: flex; align-items: center; gap: 1rem; cursor: pointer;" onclick="App.showPlayerProfileModal('${this.escapeHtml(p.public_id || p.discord_id || p.ign || p.player_id || '')}')">
-                        <img src="${PLAYER_PLACEHOLDER_AVATAR}" style="width: 46px; height: 46px; border-radius: 50%; border: 2px solid var(--border-card);">
-                        <div>
-                            <div style="font-weight: 700; color: #fff; font-size: 1.05rem;">${this.escapeHtml(p.display_name)}</div>
-                            <div style="font-size: 0.8rem; color: var(--accent-cyan);">ID: ${this.escapeHtml(p.public_id || 'GEN-P')}</div>
-                            <div style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.15rem;">🛡️ ${this.escapeHtml(p.primary_team || 'Free Agent')}</div>
-                        </div>
-                    </div>
-                `).join('')}
+            <div id="players-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 1.25rem;">
+                ${this.renderPlayersCardsHtml(players)}
             </div>
         `;
+    },
+
+    renderPlayersCardsHtml(players) {
+        if (!players || players.length === 0) {
+            return `
+                <div class="glass-panel" style="padding: 4rem 2rem; text-align: center; grid-column: 1 / -1;">
+                    <div style="font-size: 3.5rem; margin-bottom: 1rem;">👤</div>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.6rem;">No Players Found</h3>
+                    <p style="color: var(--text-secondary); margin-top: 0.5rem;">Registered competitors will appear here when teams are approved.</p>
+                </div>
+            `;
+        }
+
+        return players.map(p => `
+            <div class="glass-panel player-card-hover" style="padding: 1.25rem; display: flex; align-items: center; gap: 1.25rem; cursor: pointer;" onclick="App.showPlayerProfileModal('${this.escapeHtml(p.public_id || p.discord_id || p.ign || '')}')">
+                <img src="${PLAYER_PLACEHOLDER_AVATAR}" style="width: 52px; height: 52px; border-radius: 50%; border: 2px solid var(--accent-cyan); object-fit: cover;">
+                <div style="overflow: hidden;">
+                    <div style="font-weight: 800; color: #fff; font-size: 1.1rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${this.escapeHtml(p.display_name || p.ign)}</div>
+                    <div style="font-size: 0.78rem; color: var(--accent-gold); font-weight: 600; margin-top: 0.15rem;">ID: ${this.escapeHtml(p.public_id || 'GEN-P')}</div>
+                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                        🛡️ <strong style="color: #fff;">${this.escapeHtml(p.primary_team || 'Free Agent')}</strong>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    },
+
+    filterPlayersDisplay(query) {
+        const q = (query || '').toLowerCase().trim();
+        const grid = document.getElementById('players-grid');
+        if (!grid) return;
+
+        if (!this._cachedPlayers) {
+            Api.getPlayers().then(players => {
+                this._cachedPlayers = players;
+                this.applyPlayerFilter(grid, q);
+            });
+        } else {
+            this.applyPlayerFilter(grid, q);
+        }
+    },
+
+    applyPlayerFilter(grid, query) {
+        if (!this._cachedPlayers) return;
+        const filtered = !query ? this._cachedPlayers : this._cachedPlayers.filter(p => 
+            (p.display_name || '').toLowerCase().includes(query) ||
+            (p.ign || '').toLowerCase().includes(query) ||
+            (p.primary_team || '').toLowerCase().includes(query)
+        );
+        grid.innerHTML = this.renderPlayersCardsHtml(filtered);
     },
 
     async showPlayerProfileModal(playerId) {
@@ -636,13 +745,14 @@ const App = {
             this.showModal(`
                 <div style="max-width: 500px; margin: 0 auto; text-align: center;">
                     <img src="${PLAYER_PLACEHOLDER_AVATAR}" style="width: 80px; height: 80px; border-radius: 50%; border: 3px solid var(--accent-cyan); margin-bottom: 1rem;">
-                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">${this.escapeHtml(p.display_name)}</h2>
-                    <div style="color: var(--accent-cyan); font-weight: 700; font-size: 0.95rem; margin-bottom: 1.5rem;">Public ID: ${this.escapeHtml(p.public_id)}</div>
+                    <h2 style="font-family: var(--font-heading); font-size: 1.8rem; color: #fff;">${this.escapeHtml(p.display_name || p.ign)}</h2>
+                    <div style="color: var(--accent-cyan); font-weight: 700; font-size: 0.95rem; margin-bottom: 1.5rem;">Public ID: ${this.escapeHtml(p.public_id || 'GEN-P')}</div>
 
                     <div style="background: rgba(0,0,0,0.3); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-card); text-align: left; margin-bottom: 1.5rem;">
-                        <div style="margin-bottom: 0.75rem;">🎮 <strong>In-Game Name/ID:</strong> ${this.escapeHtml(p.in_game_id || 'N/A')}</div>
+                        <div style="margin-bottom: 0.75rem;">🎮 <strong>In-Game Name/ID:</strong> ${this.escapeHtml(p.in_game_id || p.ign || 'N/A')}</div>
                         <div style="margin-bottom: 0.75rem;">🛡️ <strong>Current Team:</strong> ${this.escapeHtml(p.primary_team || 'Free Agent')}</div>
-                        <div>📅 <strong>Registered:</strong> ${this.escapeHtml(p.created_at || 'Recent')}</div>
+                        <div style="margin-bottom: 0.75rem;">🏆 <strong>Primary Game:</strong> ${this.escapeHtml(p.primary_game || 'VALORANT')}</div>
+                        <div>✅ <strong>Verification:</strong> <span style="color: var(--accent-green); font-weight: 700;">${this.escapeHtml(p.verification_status || 'VERIFIED')}</span></div>
                     </div>
 
                     <button onclick="App.hideModal()" class="btn btn-secondary">Close</button>
@@ -679,31 +789,49 @@ const App = {
             <div style="display: flex; flex-direction: column; gap: 1rem;">
                 ${matches.length === 0 ? `
                     <div class="glass-panel" style="padding: 4rem 2rem; text-align: center;">
-                        <div style="font-size: 3rem; margin-bottom: 1rem;">⚔️</div>
-                        <h3 style="font-family: var(--font-heading); font-size: 1.5rem;">No Active Matches</h3>
-                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Matches will appear here once brackets are generated by admins.</p>
+                        <div style="font-size: 3.5rem; margin-bottom: 1rem;">⚔️</div>
+                        <h3 style="font-family: var(--font-heading); font-size: 1.6rem;">No Active Matches Scheduled</h3>
+                        <p style="color: var(--text-secondary); margin-top: 0.5rem;">Matches will appear here once brackets are generated by organizers.</p>
                     </div>
-                ` : matches.map(m => `
-                    <div class="glass-panel" style="padding: 1.25rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-                        <div style="display: flex; align-items: center; gap: 1.5rem; flex: 1; min-width: 280px;">
-                            <div style="text-align: right; flex: 1;">
-                                <div style="font-weight: 800; font-size: 1.1rem; color: #fff;">${this.escapeHtml(m.team1_name || 'TBD')}</div>
-                                <div style="font-size: 1.5rem; font-weight: 900; color: var(--accent-cyan);">${m.team1_score ?? 0}</div>
-                            </div>
-                            <div style="font-weight: 900; font-size: 1.2rem; color: var(--text-muted); padding: 0 0.5rem;">VS</div>
-                            <div style="text-align: left; flex: 1;">
-                                <div style="font-weight: 800; font-size: 1.1rem; color: #fff;">${this.escapeHtml(m.team2_name || 'TBD')}</div>
-                                <div style="font-size: 1.5rem; font-weight: 900; color: var(--accent-gold);">${m.team2_score ?? 0}</div>
-                            </div>
-                        </div>
+                ` : matches.map(m => {
+                    const t1Name = m.team1_name || m.team_a_name || 'TBD';
+                    const t2Name = m.team2_name || m.team_b_name || 'TBD';
+                    const score1 = m.team1_score ?? m.score_a ?? 0;
+                    const score2 = m.team2_score ?? m.score_b ?? 0;
+                    const isCompleted = m.status === 'COMPLETED';
+                    const isLive = m.status === 'LIVE' || m.status === 'IN_PROGRESS';
 
-                        <div style="text-align: right; border-left: 1px solid var(--border-card); padding-left: 1.5rem;">
-                            <span class="badge ${m.status === 'COMPLETED' ? 'badge-closed' : 'badge-open'}">${m.status}</span>
-                            <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.35rem;">🏆 ${this.escapeHtml(m.tournament_name || 'GEN Esports')}</div>
-                            <div style="font-size: 0.75rem; color: var(--text-muted);">${this.escapeHtml(m.stage_name || 'Round 1')}</div>
+                    return `
+                        <div class="glass-panel match-card-hover" style="padding: 1.25rem 1.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                            <div style="display: flex; align-items: center; gap: 1.5rem; flex: 1; min-width: 280px;">
+                                <div style="text-align: right; flex: 1;">
+                                    <div style="font-weight: 800; font-size: 1.15rem; color: #fff;">${this.escapeHtml(t1Name)}</div>
+                                    <div style="font-size: 1.6rem; font-weight: 900; color: var(--accent-cyan); margin-top: 0.15rem;">${score1}</div>
+                                </div>
+                                <div style="font-weight: 900; font-size: 1.2rem; color: var(--text-muted); padding: 0 0.5rem; text-align: center;">
+                                    VS
+                                </div>
+                                <div style="text-align: left; flex: 1;">
+                                    <div style="font-weight: 800; font-size: 1.15rem; color: #fff;">${this.escapeHtml(t2Name)}</div>
+                                    <div style="font-size: 1.6rem; font-weight: 900; color: var(--accent-gold); margin-top: 0.15rem;">${score2}</div>
+                                </div>
+                            </div>
+
+                            <div style="text-align: right; border-left: 1px solid var(--border-card); padding-left: 1.5rem; min-width: 180px;">
+                                <span class="badge ${isLive ? 'badge-live' : (isCompleted ? 'badge-final' : 'badge-upcoming')}">
+                                    ${isLive ? '🔴 LIVE' : (isCompleted ? '🏆 COMPLETED' : m.status || 'SCHEDULED')}
+                                </span>
+                                <div style="font-size: 0.85rem; font-weight: 700; color: #fff; margin-top: 0.4rem;">
+                                    🏆 ${this.escapeHtml(m.tournament_name || 'GEN Esports')}
+                                </div>
+                                <div style="font-size: 0.78rem; color: var(--accent-cyan); margin-top: 0.15rem; font-weight: 600;">
+                                    ${this.escapeHtml(m.stage_name || 'Round 1')}
+                                </div>
+                                ${m.scheduled_time ? `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">📅 ${this.escapeHtml(m.scheduled_time)}</div>` : ''}
+                            </div>
                         </div>
-                    </div>
-                `).join('')}
+                    `;
+                }).join('')}
             </div>
         `;
     },
@@ -720,15 +848,21 @@ const App = {
             console.warn('Error fetching tournaments for bracket:', e);
         }
 
-        const activeSlug = this.activeTournamentSlug || (tournaments[0] ? tournaments[0].slug : '');
-        let bracketMatches = [];
+        const activeSlug = this.activeTournamentSlug || (tournaments[0] ? (tournaments[0].slug || tournaments[0].tournament_id) : '');
+        let bracketData = null;
         if (activeSlug) {
             try {
-                bracketMatches = await Api.getTournamentBracket(activeSlug);
+                bracketData = await Api.getTournamentBracket(activeSlug);
             } catch (e) {
                 console.warn('Error fetching bracket:', e);
             }
         }
+
+        const hasBracket = bracketData && (
+            (bracketData.has_bracket && bracketData.rounds && bracketData.rounds.length > 0) ||
+            (Array.isArray(bracketData) && bracketData.length > 0) ||
+            (bracketData.rounds && bracketData.rounds.length > 0)
+        );
 
         container.innerHTML = `
             <div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
@@ -741,12 +875,12 @@ const App = {
 
                 ${tournaments.length > 0 ? `
                     <select onchange="App.changeBracketTournament(this.value)" class="form-select" style="max-width: 300px; background: rgba(0,0,0,0.4);">
-                        ${tournaments.map(t => `<option value="${t.slug}" ${t.slug === activeSlug ? 'selected' : ''}>🏆 ${this.escapeHtml(t.title)}</option>`).join('')}
+                        ${tournaments.map(t => `<option value="${t.slug || t.tournament_id}" ${t.slug === activeSlug || String(t.tournament_id) === String(activeSlug) ? 'selected' : ''}>🏆 ${this.escapeHtml(t.title)}</option>`).join('')}
                     </select>
                 ` : ''}
             </div>
 
-            ${bracketMatches.length === 0 ? `
+            ${!hasBracket ? `
                 <div class="glass-panel" style="padding: 4rem 2rem; text-align: center;">
                     <div style="font-size: 3.5rem; margin-bottom: 1rem;">🌳</div>
                     <h3 style="font-family: var(--font-heading); font-size: 1.6rem;">Bracket Tree Not Generated Yet</h3>
@@ -757,42 +891,48 @@ const App = {
             ` : `
                 <div class="glass-panel" style="padding: 2rem; overflow-x: auto;">
                     <div style="display: flex; gap: 3rem; min-width: 800px; justify-content: space-around;">
-                        ${this.buildBracketTreeHtml(bracketMatches)}
+                        ${this.buildBracketTreeHtml(bracketData)}
                     </div>
                 </div>
             `}
         `;
     },
 
-    buildBracketTreeHtml(matches) {
-        // Group matches by round / stage
-        const rounds = {};
-        matches.forEach(m => {
-            const r = m.stage_name || 'Round 1';
-            if (!rounds[r]) rounds[r] = [];
-            rounds[r].push(m);
-        });
+    buildBracketTreeHtml(bracketData) {
+        if (!bracketData) return '';
+        
+        let roundsList = [];
+        if (bracketData.rounds && Array.isArray(bracketData.rounds)) {
+            roundsList = bracketData.rounds;
+        } else if (Array.isArray(bracketData)) {
+            const grouped = {};
+            bracketData.forEach(m => {
+                const rName = m.stage_name || `Round ${m.round_number || 1}`;
+                if (!grouped[rName]) grouped[rName] = [];
+                grouped[rName].push(m);
+            });
+            roundsList = Object.keys(grouped).map(rName => ({ round_name: rName, matches: grouped[rName] }));
+        }
 
-        return Object.keys(rounds).map(rName => `
+        return roundsList.map(r => `
             <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-around;">
-                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; text-align: center; margin-bottom: 1.5rem; color: var(--accent-cyan); border-bottom: 1px solid var(--border-card); padding-bottom: 0.5rem;">${this.escapeHtml(rName)}</h4>
+                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; text-align: center; margin-bottom: 1.5rem; color: var(--accent-cyan); border-bottom: 1px solid var(--border-card); padding-bottom: 0.5rem;">${this.escapeHtml(r.round_name || `Round ${r.round_number}`)}</h4>
                 <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-                    ${rounds[rName].map(m => `
+                    ${(r.matches || []).map(m => `
                         <div style="background: rgba(0,0,0,0.5); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 0.75rem;">
                             <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; margin-bottom: 0.35rem; color: ${m.winner_id && m.winner_id === m.team1_id ? 'var(--accent-cyan)' : '#fff'};">
-                                <span>🛡️ ${this.escapeHtml(m.team1_name || 'TBD')}</span>
-                                <span>${m.team1_score ?? 0}</span>
+                                <span>🛡️ ${this.escapeHtml(m.team1_name || m.team_a_name || 'TBD')}</span>
+                                <span>${m.team1_score ?? m.score_a ?? 0}</span>
                             </div>
                             <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; color: ${m.winner_id && m.winner_id === m.team2_id ? 'var(--accent-cyan)' : '#fff'};">
-                                <span>🛡️ ${this.escapeHtml(m.team2_name || 'TBD')}</span>
-                                <span>${m.team2_score ?? 0}</span>
+                                <span>🛡️ ${this.escapeHtml(m.team2_name || m.team_b_name || 'TBD')}</span>
+                                <span>${m.team2_score ?? m.score_b ?? 0}</span>
                             </div>
                         </div>
                     `).join('')}
                 </div>
             </div>
         `).join('');
-    },
 
     changeBracketTournament(slug) {
         this.activeTournamentSlug = slug;
