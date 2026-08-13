@@ -1432,8 +1432,11 @@ def _create_tournament_sync(data: dict) -> dict:
     status = data.get("status") or "REGISTRATION_OPEN"
     registration_status = data.get("registration_status") or "OPEN"
     max_teams = int(data.get("max_teams") or 16)
-    start_date = data.get("start_date")
+    registration_start = data.get("registration_start")
     registration_deadline = data.get("registration_deadline")
+    tournament_start = data.get("tournament_start") or data.get("start_date")
+    tournament_end = data.get("tournament_end")
+    start_date = data.get("start_date") or tournament_start
     prize_info = data.get("prize_info") or "$500 USD"
     description = data.get("description") or f"Official {title} Series"
     rules_text = data.get("rules_text") or f"Official {title} Rules and Regulations."
@@ -1447,13 +1450,13 @@ def _create_tournament_sync(data: dict) -> dict:
         cursor.execute("""
             INSERT INTO tournaments (
                 slug, title, game_type, status, registration_status, max_teams,
-                start_date, registration_deadline, prize_info, description,
-                rules_text, format, min_players, max_players, banner_url
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                start_date, registration_start, registration_deadline, tournament_start, tournament_end,
+                prize_info, description, rules_text, format, min_players, max_players, banner_url
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """, (
             slug, title, game_type, status, registration_status, max_teams,
-            start_date, registration_deadline, prize_info, description,
-            rules_text, format_type, min_players, max_players, banner_url
+            start_date, registration_start, registration_deadline, tournament_start, tournament_end,
+            prize_info, description, rules_text, format_type, min_players, max_players, banner_url
         ))
         conn.commit()
         tournament_id = cursor.lastrowid
@@ -1469,7 +1472,8 @@ def _update_tournament_sync(tournament_id: int, data: dict) -> dict | None:
     allowed_fields = [
         "title", "slug", "game_type", "status", "registration_status", "max_teams",
         "start_date", "registration_deadline", "prize_info", "description",
-        "rules_text", "format", "min_players", "max_players", "banner_url", "logo_url"
+        "rules_text", "format", "min_players", "max_players", "banner_url", "logo_url",
+        "registration_start", "tournament_start", "tournament_end"
     ]
     updates = []
     values = []

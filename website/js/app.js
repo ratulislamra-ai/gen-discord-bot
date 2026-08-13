@@ -10,7 +10,19 @@ document.addEventListener('DOMContentLoaded', () => {
 const TEAM_PLACEHOLDER_LOGO = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48cmVjdCB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHJ4PSIxMiIgZmlsbD0iIzFhMjAzNSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTUlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjI4Ij7wn4ef77iJPC90ZXh0Pjwvc3ZnPg==';
 const PLAYER_PLACEHOLDER_AVATAR = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NCIgaGVpZ2h0PSI2NCIgdmlld0JveD0iMCAwIDY0IDY0Ij48Y2lyY2xlIGN4PSIzMiIgY3k9IzMyIiByPSIzMiIgZmlsbD0iIzFhMjAzNSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTUlIiBkb21pbmFudC1iYXNlbGluZT0ibWlkZGxlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjI4Ij7wn5CwPC90ZXh0Pjwvc3ZnPg==';
 
+function toDateTimeLocalValue(value) {
+    if (!value) return '';
+
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+
+    const pad = n => String(n).padStart(2, '0');
+
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 const App = {
+    toDateTimeLocalValue,
     currentView: 'home',
     discordInviteUrl: '',
     autoRefreshInterval: null,
@@ -1133,7 +1145,8 @@ const App = {
             container.innerHTML = `
                 <div class="glass-panel" style="padding: 2rem; margin-bottom: 2.5rem;">
                     <h3 style="font-family: var(--font-heading); font-size: 1.4rem; margin-bottom: 1.25rem;">➕ Create New Tournament</h3>
-                    <form onsubmit="App.handleCreateTournament(event)">
+                    <div id="t-form-error" class="form-error-msg" style="display: none; color: #ff6b6b; background: rgba(255,107,107,0.1); border: 1px solid rgba(255,107,107,0.3); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem; font-size: 0.9rem; font-weight: 600;"></div>
+                    <form onsubmit="App.handleCreateTournament(event)" novalidate>
                         <div class="form-grid">
                             <div class="form-group"><label>Tournament Name</label><input type="text" id="t-title" class="form-input" placeholder="e.g. GEN Valorant Masters" required></div>
                             <div class="form-group"><label>Game</label><input type="text" id="t-game" class="form-input" placeholder="VALORANT / PUBG MOBILE / CS2" required></div>
@@ -1313,21 +1326,89 @@ const App = {
         }
     },
 
+    showFormError(msg) {
+        const errEl = document.getElementById('t-form-error');
+        if (errEl) {
+            errEl.textContent = '⚠️ ' + msg;
+            errEl.style.display = 'block';
+            errEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } else {
+            this.showToast('⚠️ ' + msg, 'error');
+        }
+    },
+
     async handleCreateTournament(e) {
         e.preventDefault();
-        const title = document.getElementById('t-title').value;
-        const game_type = document.getElementById('t-game').value;
-        const prize_info = document.getElementById('t-prize').value;
+        const errEl = document.getElementById('t-form-error');
+        if (errEl) {
+            errEl.style.display = 'none';
+            errEl.textContent = '';
+        }
+
+        const title = (document.getElementById('t-title').value || '').trim();
+        const game_type = (document.getElementById('t-game').value || '').trim();
+        const prize_info = (document.getElementById('t-prize').value || '').trim();
         const max_teams = parseInt(document.getElementById('t-max').value || '16', 10);
         const format = document.getElementById('t-format').value;
         const status = document.getElementById('t-status').value;
-        const registration_start = document.getElementById('t-reg-start').value;
-        const registration_deadline = document.getElementById('t-reg-deadline').value;
-        const tournament_start = document.getElementById('t-start').value;
-        const tournament_end = document.getElementById('t-end').value;
+
+        if (!title || !game_type) {
+            this.showFormError('Tournament Name and Game are required.');
+            return;
+        }
+
+        const regStartInput = document.getElementById('t-reg-start');
+        const regDeadlineInput = document.getElementById('t-reg-deadline');
+        const tournStartInput = document.getElementById('t-start');
+        const tournEndInput = document.getElementById('t-end');
+
+        const regStartRaw = regStartInput ? regStartInput.value : '';
+        const regDeadlineRaw = regDeadlineInput ? regDeadlineInput.value : '';
+        const tournStartRaw = tournStartInput ? tournStartInput.value : '';
+        const tournEndRaw = tournEndInput ? tournEndInput.value : '';
+
+        const registration_start = toDateTimeLocalValue(regStartRaw);
+        const registration_deadline = toDateTimeLocalValue(regDeadlineRaw);
+        const tournament_start = toDateTimeLocalValue(tournStartRaw);
+        const tournament_end = toDateTimeLocalValue(tournEndRaw);
+
+        if (regStartRaw && !registration_start) {
+            this.showFormError('Please enter a valid Registration Start date and time.');
+            return;
+        }
+        if (regDeadlineRaw && !registration_deadline) {
+            this.showFormError('Please enter a valid Registration Deadline date and time.');
+            return;
+        }
+        if (tournStartRaw && !tournament_start) {
+            this.showFormError('Please enter a valid Tournament Start date and time.');
+            return;
+        }
+        if (tournEndRaw && !tournament_end) {
+            this.showFormError('Please enter a valid Tournament End date and time.');
+            return;
+        }
+
+        const dRegStart = registration_start ? new Date(registration_start) : null;
+        const dRegDead = registration_deadline ? new Date(registration_deadline) : null;
+        const dTournStart = tournament_start ? new Date(tournament_start) : null;
+        const dTournEnd = tournament_end ? new Date(tournament_end) : null;
+
+        if (dRegStart && dRegDead && dRegStart.getTime() >= dRegDead.getTime()) {
+            this.showFormError('Registration Start must be earlier than Registration Deadline.');
+            return;
+        }
+        if (dRegDead && dTournStart && dRegDead.getTime() > dTournStart.getTime()) {
+            this.showFormError('Registration Deadline must be on or before Tournament Start.');
+            return;
+        }
+        if (dTournStart && dTournEnd && dTournStart.getTime() >= dTournEnd.getTime()) {
+            this.showFormError('Tournament Start must be earlier than Tournament End.');
+            return;
+        }
+
         const description = document.getElementById('t-desc').value;
         const rules_text = document.getElementById('t-rules').value;
-
         const registration_status = status === 'REGISTRATION_OPEN' ? 'OPEN' : 'CLOSED';
 
         try {
@@ -1339,7 +1420,7 @@ const App = {
             this.showToast('🏆 Tournament created successfully!', 'success');
             await this.refreshAdminData();
         } catch (err) {
-            this.showToast('✕ Failed to create tournament: ' + err.message, 'error');
+            this.showFormError('Failed to create tournament: ' + err.message);
         }
     },
 
