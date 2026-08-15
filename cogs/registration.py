@@ -663,6 +663,7 @@ class AdminReviewView(discord.ui.View):
                 logger.error(f"Error notifying ticket channel of approval: {e}")
 
         # DM Captain if possible
+        try:
             captain_user = await interaction.client.fetch_user(ticket["user_id"])
             if captain_user:
                 dm_embed = discord.Embed(
