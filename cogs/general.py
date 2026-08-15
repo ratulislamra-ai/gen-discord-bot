@@ -140,17 +140,19 @@ class GeneralCog(commands.Cog):
         channel="Select your EXISTING Discord Welcome channel",
         enabled="Enable or disable welcome system notifications"
     )
-    @app_commands.channel_types(discord.ChannelType.text, discord.ChannelType.news)
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_welcome_cmd(
         self,
         interaction: discord.Interaction,
-        channel: Union[discord.TextChannel, discord.NewsChannel],
+        channel: discord.TextChannel,
         enabled: bool = True
     ):
         """Admin command to configure existing Welcome channel and persist ID to SQLite database."""
         await interaction.response.defer(ephemeral=True)
         try:
+            if channel.type not in (discord.ChannelType.text, discord.ChannelType.news):
+                await interaction.followup.send("❌ Invalid channel type. Please select a text or announcement channel.", ephemeral=True)
+                return
             # Save channel ID and enabled state to SQLite bot_settings table
             await set_bot_setting("welcome_channel_id", str(channel.id))
             await set_bot_setting("welcome_enabled", "true" if enabled else "false")
