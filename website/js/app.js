@@ -77,6 +77,8 @@ const App = {
                 await this.renderTournamentsView();
             } else if (this.currentView === 'matches') {
                 await this.renderMatchesView();
+            } else if (this.currentView === 'brackets') {
+                await this.renderBracketsView();
             }
         } catch (err) {
             console.warn('Silent background refresh notice:', err);
@@ -827,11 +829,17 @@ const App = {
         `;
     },
 
-    // RENDER BRACKETS VIEW
+    // ═══════════════════════════════════════════════════════════
+    // RENDER BRACKETS VIEW — Premium World Cup Style
+    // ═══════════════════════════════════════════════════════════
     async renderBracketsView() {
         const container = document.getElementById('app-content');
         if (!container) return;
 
+        // Clear match data cache for fresh render
+        this._bracketMatchCache = {};
+
+        // Fetch tournament list for selector
         let tournaments = [];
         try {
             tournaments = await Api.getTournaments();
@@ -839,7 +847,10 @@ const App = {
             console.warn('Error fetching tournaments for bracket:', e);
         }
 
-        const activeSlug = this.activeTournamentSlug || (tournaments[0] ? (tournaments[0].slug || tournaments[0].tournament_id) : '');
+        // Determine active tournament
+        const activeSlug = this.activeTournamentSlug || (tournaments[0] ? (tournaments[0].slug || String(tournaments[0].tournament_id)) : '');
+
+        // Fetch bracket data for active tournament
         let bracketData = null;
         if (activeSlug) {
             try {
@@ -849,86 +860,429 @@ const App = {
             }
         }
 
+        // Parse bracket data
         const hasBracket = bracketData && (
-            (bracketData.has_bracket && bracketData.rounds && bracketData.rounds.length > 0) ||
-            (Array.isArray(bracketData) && bracketData.length > 0) ||
-            (bracketData.rounds && bracketData.rounds.length > 0)
+            (bracketData.has_bracket && bracketData.rounds && bracketData.rounds.length > 0)
         );
+        const tournament = bracketData && bracketData.tournament;
+        const rounds = (bracketData && bracketData.rounds) || [];
+        const champion = (bracketData && bracketData.champion) || null;
+
+        // ─── Build tournament metadata ───────────────────────────
+        const tName = tournament ? (tournament.title || tournament.name || 'Tournament') : 'Tournament';
+        const tGame = tournament ? (tournament.game || 'Esports') : 'Esports';
+        const tStatus = tournament ? (tournament.status || 'ACTIVE') : 'ACTIVE';
+        const tTeams = tournament ? (tournament.registered_teams_count || tournament.max_teams || 0) : 0;
+        const numRounds = rounds.length;
+
+        // Status pill color class
+        const statusClass = tStatus === 'ONGOING' || tStatus === 'ACTIVE' ? 'green' : (tStatus === 'COMPLETED' ? '' : 'gold');
+
+        // Build round tabs for mobile
+        const roundTabsHtml = rounds.map((r, i) => {
+            const shortName = (r.round_name || `Round ${r.round_number}`)
+                .replace('ROUND OF ', 'RO')
+                .replace('QUARTER FINALS', 'QF')
+                .replace('SEMI FINALS', 'SF')
+                .replace('GRAND FINAL', 'FINAL');
+            return `<button class="bracket-tab-btn ${i === 0 ? 'active' : ''}" onclick="App.bracketShowRound(${i})" data-round-idx="${i}" aria-label="Show ${this.escapeHtml(r.round_name || `Round ${r.round_number}`)}">${this.escapeHtml(shortName)}</button>`;
+        }).join('');
+
+        // Build main bracket HTML
+        const bracketBodyHtml = !hasBracket ? `
+            <div style="padding: 4rem 2rem; text-align: center; background: var(--bg-surface); border: 1px solid var(--border-card); border-radius: var(--radius-lg); box-shadow: inset 0 0 40px rgba(0,0,0,0.5);">
+                <div style="font-size: 3.5rem; margin-bottom: 1.25rem; opacity: 0.4;">🌳</div>
+                <h3 style="font-family: var(--font-heading); font-size: 1.6rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.75rem;">No Bracket Generated Yet</h3>
+                <p style="color: var(--text-secondary); font-size: 0.95rem; max-width: 480px; margin: 0 auto 1rem;">
+                    The tournament organizer will generate the bracket once team registration closes.
+                </p>
+                <div style="display: inline-flex; align-items: center; gap: 0.5rem; background: rgba(0,240,255,0.08); border: 1px solid rgba(0,240,255,0.25); color: var(--accent-cyan); padding: 0.4rem 1rem; border-radius: 20px; font-size: 0.82rem; font-weight: 700;">
+                    ⏳ AWAITING BRACKET GENERATION
+                </div>
+            </div>
+        ` : `
+            ${rounds.length > 0 ? `
+                <div class="bracket-mobile-tabs" id="bracket-mobile-tabs">
+                    ${roundTabsHtml}
+                </div>
+            ` : ''}
+            <div class="esports-bracket-viewport">
+                <div class="esports-bracket-tree" id="esports-bracket-tree" style="position: relative;">
+                    ${this.buildPremiumBracketHtml(rounds)}
+                </div>
+            </div>
+            ${champion ? `
+                <div class="champion-banner" style="margin-top: 2rem;">
+                    <div style="font-size: 0.8rem; font-weight: 900; letter-spacing: 3px; color: var(--accent-gold); text-transform: uppercase; margin-bottom: 0.5rem;">🏆 Tournament Champion</div>
+                    ${champion.logo_url ? `<img src="${this.escapeHtml(champion.logo_url)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" class="champion-logo" alt="${this.escapeHtml(champion.name)}">` : `<div class="champion-logo" style="display:flex;align-items:center;justify-content:center;font-size:2rem;">🏆</div>`}
+                    <div class="champion-title">${this.escapeHtml(champion.name || 'Champions')}</div>
+                </div>
+            ` : ''}
+        `;
 
         container.innerHTML = `
-            <div style="margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
-                <div>
-                    <div class="hero-badge">🌳 TOURNAMENT BRACKET</div>
-                    <h1 style="font-family: var(--font-heading); font-size: 2.4rem; margin-top: 0.25rem;">
-                        LIVE BRACKET <span class="gradient-text">TREE</span>
-                    </h1>
-                </div>
+            <div class="bracket-page-wrapper">
+                <!-- ══ TOURNAMENT HEADER CARD ══════════════════════════ -->
+                <div class="bracket-header-card">
+                    <div class="bracket-header-top">
+                        <div>
+                            <div class="bracket-header-title">
+                                🏆 TOURNAMENT BRACKET
+                            </div>
+                            <div class="bracket-meta-pills" style="margin-top: 0.6rem;">
+                                <span class="bracket-meta-pill">${this.escapeHtml(tGame)}</span>
+                                ${tTeams > 0 ? `<span class="bracket-meta-pill">${tTeams} TEAMS</span>` : ''}
+                                ${numRounds > 0 ? `<span class="bracket-meta-pill">${numRounds} ROUND${numRounds !== 1 ? 'S' : ''}</span>` : ''}
+                                ${hasBracket ? `<span class="bracket-meta-pill ${statusClass}">● ${this.escapeHtml(tStatus)}</span>` : ''}
+                                ${champion ? `<span class="bracket-meta-pill gold">🏆 CHAMPION CROWNED</span>` : ''}
+                            </div>
+                            <div style="font-family: var(--font-heading); font-size: 1.4rem; font-weight: 800; color: #fff; margin-top: 0.5rem; letter-spacing: -0.3px;">${this.escapeHtml(tName)}</div>
+                        </div>
 
-                ${tournaments.length > 0 ? `
-                    <select onchange="App.changeBracketTournament(this.value)" class="form-select" style="max-width: 300px; background: rgba(0,0,0,0.4);">
-                        ${tournaments.map(t => `<option value="${t.slug || t.tournament_id}" ${t.slug === activeSlug || String(t.tournament_id) === String(activeSlug) ? 'selected' : ''}>🏆 ${this.escapeHtml(t.title)}</option>`).join('')}
-                    </select>
-                ` : ''}
-            </div>
+                        ${tournaments.length > 0 ? `
+                            <div>
+                                <div style="font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 0.35rem;">Tournament</div>
+                                <select onchange="App.changeBracketTournament(this.value)" class="form-select" style="min-width: 240px; background: rgba(0,0,0,0.5);" aria-label="Select Tournament">
+                                    ${tournaments.map(t => `<option value="${this.escapeHtml(t.slug || String(t.tournament_id))}" ${(t.slug === activeSlug || String(t.tournament_id) === String(activeSlug)) ? 'selected' : ''}>🏆 ${this.escapeHtml(t.title || t.name)}</option>`).join('')}
+                                </select>
+                            </div>
+                        ` : ''}
+                    </div>
 
-            ${!hasBracket ? `
-                <div class="glass-panel" style="padding: 4rem 2rem; text-align: center;">
-                    <div style="font-size: 3.5rem; margin-bottom: 1rem;">🌳</div>
-                    <h3 style="font-family: var(--font-heading); font-size: 1.6rem;">Bracket Tree Not Generated Yet</h3>
-                    <p style="color: var(--text-secondary); margin-top: 0.5rem;">
-                        The tournament organizer will generate the single/double elimination bracket once registration closes.
-                    </p>
-                </div>
-            ` : `
-                <div class="glass-panel" style="padding: 2rem; overflow-x: auto;">
-                    <div style="display: flex; gap: 3rem; min-width: 800px; justify-content: space-around;">
-                        ${this.buildBracketTreeHtml(bracketData)}
+                    <!-- Legend bar -->
+                    <div class="bracket-controls-bar">
+                        <div class="bracket-legend" role="list" aria-label="Match status legend">
+                            <div class="legend-item" role="listitem"><span class="legend-dot live"></span> Live</div>
+                            <div class="legend-item" role="listitem"><span class="legend-dot completed"></span> Completed</div>
+                            <div class="legend-item" role="listitem"><span class="legend-dot upcoming"></span> Upcoming</div>
+                            <div class="legend-item" role="listitem"><span class="legend-dot tbd"></span> TBD</div>
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-muted); font-weight: 600;">
+                            Scroll horizontally to view full bracket →
+                        </div>
                     </div>
                 </div>
-            `}
+
+                <!-- ══ BRACKET BODY ════════════════════════════════════ -->
+                ${bracketBodyHtml}
+            </div>
         `;
+
+        // Draw connector lines after DOM is updated & bind window resize listener
+        if (hasBracket) {
+            requestAnimationFrame(() => this.drawBracketConnectors());
+            if (!this._bracketResizeBound) {
+                this._bracketResizeBound = true;
+                window.addEventListener('resize', () => {
+                    if (this.currentView === 'brackets') {
+                        this.drawBracketConnectors();
+                    }
+                });
+            }
+        }
     },
 
-    buildBracketTreeHtml(bracketData) {
-        if (!bracketData) return '';
-        
-        let roundsList = [];
-        if (bracketData.rounds && Array.isArray(bracketData.rounds)) {
-            roundsList = bracketData.rounds;
-        } else if (Array.isArray(bracketData)) {
-            const grouped = {};
-            bracketData.forEach(m => {
-                const rName = m.stage_name || `Round ${m.round_number || 1}`;
-                if (!grouped[rName]) grouped[rName] = [];
-                grouped[rName].push(m);
-            });
-            roundsList = Object.keys(grouped).map(rName => ({ round_name: rName, matches: grouped[rName] }));
+    // ═══════════════════════════════════════════════════════════
+    // BUILD PREMIUM BRACKET HTML — Round Columns with Match Cards
+    // ═══════════════════════════════════════════════════════════
+    buildPremiumBracketHtml(rounds) {
+        if (!rounds || rounds.length === 0) return '';
+        const totalRounds = rounds.length;
+
+        return rounds.map((round, roundIdx) => {
+            const isFinal = roundIdx === totalRounds - 1;
+            const roundName = round.round_name || `ROUND ${round.round_number}`;
+            const matches = round.matches || [];
+
+            // Use justified spacing for each round
+            const matchesHtml = matches.map((m, matchIdx) => {
+                const matchId = m.public_match_id || m.match_id || '';
+                const t1Name = m.team1_name || m.team_a_name || null;
+                const t2Name = m.team2_name || m.team_b_name || null;
+                const t1Score = m.team1_score ?? m.score_a ?? null;
+                const t2Score = m.team2_score ?? m.score_b ?? null;
+                const t1Logo = m.team1_logo || '';
+                const t2Logo = m.team2_logo || '';
+                const winnerId = m.winner_id || null;
+                const t1Id = m.team1_id || null;
+                const t2Id = m.team2_id || null;
+
+                const status = (m.status || '').toUpperCase();
+                const isCompleted = status === 'COMPLETED';
+                const isLive = status === 'LIVE' || status === 'IN_PROGRESS';
+                const isTBD = !t1Name && !t2Name;
+
+                // Determine winner/loser states
+                const t1IsWinner = isCompleted && winnerId && t1Id && winnerId === t1Id;
+                const t2IsWinner = isCompleted && winnerId && t2Id && winnerId === t2Id;
+
+                // Status badge
+                let statusBadgeClass = 'tbd';
+                let statusBadgeText = '◼ TBD';
+                if (isLive) { statusBadgeClass = 'live'; statusBadgeText = '● LIVE'; }
+                else if (isCompleted) { statusBadgeClass = 'completed'; statusBadgeText = '✓ DONE'; }
+                else if (t1Name || t2Name) { statusBadgeClass = 'upcoming'; statusBadgeText = '🕐 UPCOMING'; }
+
+                // State class for card
+                let cardStateClass = '';
+                if (isLive) cardStateClass = 'state-live';
+                if (isFinal && isCompleted) cardStateClass += ' is-grand-final';
+                else if (isFinal) cardStateClass += ' is-grand-final';
+
+                // Team logo HTML
+                const logoFor = (logoUrl, teamName) => {
+                    if (logoUrl) {
+                        return `<img src="${this.escapeHtml(logoUrl)}" onerror="App.handleImgError(this, '${TEAM_PLACEHOLDER_LOGO}')" class="match-team-logo" alt="${this.escapeHtml(teamName || 'Team')}">`;
+                    }
+                    // Default SVG badge for no-logo
+                    const initial = (teamName || '?').charAt(0).toUpperCase();
+                    return `<div class="match-team-logo" style="background: rgba(0,240,255,0.12); border: 1px solid rgba(0,240,255,0.3); display:flex;align-items:center;justify-content:center; font-family:var(--font-heading); font-weight:900; font-size:0.7rem; color:var(--accent-cyan);">${initial}</div>`;
+                };
+
+                // Team 1 row
+                const t1Classes = `match-team-row${t1IsWinner ? ' winner' : ''}${isCompleted && !t1IsWinner && t1Name ? ' loser' : ''}${!t1Name ? ' tbd-slot' : ''}`;
+                const t1Html = `
+                    <div class="${t1Classes}">
+                        <div class="match-team-info">
+                            ${logoFor(t1Logo, t1Name)}
+                            <span class="match-team-name">${this.escapeHtml(t1Name || 'TBD')}</span>
+                        </div>
+                        <span class="match-team-score">${(isCompleted || isLive) && t1Score !== null ? t1Score : (t1Name ? '–' : '')}</span>
+                    </div>
+                `;
+
+                // Team 2 row
+                const t2Classes = `match-team-row${t2IsWinner ? ' winner' : ''}${isCompleted && !t2IsWinner && t2Name ? ' loser' : ''}${!t2Name ? ' tbd-slot' : ''}`;
+                const t2Html = `
+                    <div class="${t2Classes}">
+                        <div class="match-team-info">
+                            ${logoFor(t2Logo, t2Name)}
+                            <span class="match-team-name">${this.escapeHtml(t2Name || 'TBD')}</span>
+                        </div>
+                        <span class="match-team-score">${(isCompleted || isLive) && t2Score !== null ? t2Score : (t2Name ? '–' : '')}</span>
+                    </div>
+                `;
+
+                // Winner indicator
+                const winnerName = t1IsWinner ? t1Name : (t2IsWinner ? t2Name : null);
+                const winnerHtml = winnerName && isCompleted ? `
+                    <div class="match-winner-indicator" aria-label="Winner: ${this.escapeHtml(winnerName)}">
+                        ✓ <span>${this.escapeHtml(winnerName)}</span> advanced
+                    </div>
+                ` : '';
+
+                // Footer (time or status note)
+                let footerHtml = '';
+                if (isLive) {
+                    footerHtml = `<div class="match-card-footer live-footer">🔴 MATCH IN PROGRESS</div>`;
+                } else if (m.scheduled_time && !isCompleted) {
+                    const dt = new Date(m.scheduled_time);
+                    const timeStr = isNaN(dt.getTime()) ? m.scheduled_time : dt.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    footerHtml = `<div class="match-card-footer">📅 ${this.escapeHtml(timeStr)}</div>`;
+                } else if (isTBD) {
+                    footerHtml = `<div class="match-card-footer">⏳ Awaiting previous round</div>`;
+                }
+
+                // Store match data in cache for modal retrieval (safe - no JSON in HTML attr)
+                if (!this._bracketMatchCache) this._bracketMatchCache = {};
+                const cacheKey = `r${roundIdx}m${matchIdx}`;
+                this._bracketMatchCache[cacheKey] = m;
+
+                const onClickAttr = `onclick="App.showBracketMatchModal('${cacheKey}')"`;
+
+                return `
+                    <div class="bracket-match-card ${cardStateClass}" ${onClickAttr}
+                         data-round="${roundIdx}" data-match="${matchIdx}"
+                         role="button" tabindex="0" aria-label="Match: ${this.escapeHtml(t1Name || 'TBD')} vs ${this.escapeHtml(t2Name || 'TBD')}">
+                        <!-- Match meta header -->
+                        <div class="match-card-meta">
+                            <span class="match-card-id">${matchId ? `#${this.escapeHtml(String(matchId))}` : `M${matchIdx + 1}`}</span>
+                            <span class="match-card-status ${statusBadgeClass}">${statusBadgeText}</span>
+                        </div>
+                        <!-- Teams -->
+                        ${t1Html}
+                        ${t2Html}
+                        <!-- Winner + footer -->
+                        ${winnerHtml}
+                        ${footerHtml}
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <div class="bracket-round-column ${isFinal ? 'is-final' : ''} mobile-round-${roundIdx === 0 ? 'visible' : 'hidden'}"
+                     data-round-idx="${roundIdx}" id="bracket-round-col-${roundIdx}"
+                     aria-label="${this.escapeHtml(roundName)}">
+                    <div class="bracket-round-header">
+                        <div class="round-header-pill">${this.escapeHtml(roundName)}</div>
+                    </div>
+                    <div class="bracket-round-matches">
+                        ${matchesHtml}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    },
+
+    // ═══════════════════════════════════════════════════════════
+    // DRAW BRACKET CONNECTOR LINES (SVG overlay)
+    // ═══════════════════════════════════════════════════════════
+    drawBracketConnectors() {
+        const tree = document.getElementById('esports-bracket-tree');
+        if (!tree) return;
+
+        // Remove any existing SVG layer
+        const existing = tree.querySelector('.bracket-svg-layer');
+        if (existing) existing.remove();
+
+        const columns = Array.from(tree.querySelectorAll('.bracket-round-column'));
+        if (columns.length < 2) return;
+
+        const treeRect = tree.getBoundingClientRect();
+        const totalRounds = columns.length;
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'bracket-svg-layer');
+        svg.setAttribute('aria-hidden', 'true');
+
+        for (let ci = 0; ci < columns.length - 1; ci++) {
+            const leftCol = columns[ci];
+            const rightCol = columns[ci + 1];
+
+            const leftCards = Array.from(leftCol.querySelectorAll('.bracket-match-card'));
+            const rightCards = Array.from(rightCol.querySelectorAll('.bracket-match-card'));
+            if (!leftCards.length || !rightCards.length) continue;
+
+            const isFinalConnector = ci === totalRounds - 2;
+
+            // Each pair of left-round matches feeds one right-round match
+            for (let ri = 0; ri < rightCards.length; ri++) {
+                const top = leftCards[ri * 2];
+                const bottom = leftCards[ri * 2 + 1];
+                const target = rightCards[ri];
+                if (!target) continue;
+
+                const targetRect = target.getBoundingClientRect();
+                const targetX = targetRect.left - treeRect.left;
+                const targetY = targetRect.top - treeRect.top + targetRect.height / 2;
+
+                const drawLine = (sourceCard) => {
+                    if (!sourceCard) return;
+                    const srcRect = sourceCard.getBoundingClientRect();
+                    const srcX = srcRect.right - treeRect.left;
+                    const srcY = srcRect.top - treeRect.top + srcRect.height / 2;
+
+                    const midX = srcX + (targetX - srcX) / 2;
+
+                    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                    // Horizontal from source card right → midpoint, then vertical → horizontal to target
+                    const d = `M ${srcX} ${srcY} H ${midX} V ${targetY} H ${targetX}`;
+                    path.setAttribute('d', d);
+                    path.setAttribute('class', `bracket-connector-path${isFinalConnector ? ' final' : ''}`);
+                    svg.appendChild(path);
+                };
+
+                drawLine(top);
+                drawLine(bottom);
+            }
         }
 
-        return roundsList.map(r => `
-            <div style="flex: 1; display: flex; flex-direction: column; justify-content: space-around;">
-                <h4 style="font-family: var(--font-heading); font-size: 1.1rem; text-align: center; margin-bottom: 1.5rem; color: var(--accent-cyan); border-bottom: 1px solid var(--border-card); padding-bottom: 0.5rem;">${this.escapeHtml(r.round_name || `Round ${r.round_number}`)}</h4>
-                <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-                    ${(r.matches || []).map(m => `
-                        <div style="background: rgba(0,0,0,0.5); border: 1px solid var(--border-card); border-radius: var(--radius-sm); padding: 0.75rem;">
-                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; margin-bottom: 0.35rem; color: ${m.winner_id && m.winner_id === m.team1_id ? 'var(--accent-cyan)' : '#fff'};">
-                                <span>🛡️ ${this.escapeHtml(m.team1_name || m.team_a_name || 'TBD')}</span>
-                                <span>${m.team1_score ?? m.score_a ?? 0}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 0.85rem; font-weight: 700; color: ${m.winner_id && m.winner_id === m.team2_id ? 'var(--accent-cyan)' : '#fff'};">
-                                <span>🛡️ ${this.escapeHtml(m.team2_name || m.team_b_name || 'TBD')}</span>
-                                <span>${m.team2_score ?? m.score_b ?? 0}</span>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `).join('');
+        // Set SVG viewport
+        const treeComputedRect = tree.getBoundingClientRect();
+        svg.setAttribute('width', treeComputedRect.width);
+        svg.setAttribute('height', treeComputedRect.height);
+        svg.setAttribute('viewBox', `0 0 ${treeComputedRect.width} ${treeComputedRect.height}`);
+
+        tree.insertBefore(svg, tree.firstChild);
     },
 
-    changeBracketTournament(slug) {
+    // ═══════════════════════════════════════════════════════════
+    // BRACKET MATCH DETAIL MODAL
+    // ═══════════════════════════════════════════════════════════
+    showBracketMatchModal(matchOrKey) {
+        // Accept either a cache key string or direct match object
+        let match;
+        if (typeof matchOrKey === 'string') {
+            match = (this._bracketMatchCache || {})[matchOrKey];
+        } else {
+            match = matchOrKey;
+        }
+        if (!match) return;
+        const t1 = match.team1_name || match.team_a_name || 'TBD';
+        const t2 = match.team2_name || match.team_b_name || 'TBD';
+        const s1 = match.team1_score ?? match.score_a ?? '–';
+        const s2 = match.team2_score ?? match.score_b ?? '–';
+        const status = match.status || 'PENDING';
+        const isCompleted = status === 'COMPLETED';
+        const matchId = match.public_match_id || match.match_id || '';
+        const stage = match.stage_name || '';
+
+        let dt = '';
+        if (match.scheduled_time) {
+            const d = new Date(match.scheduled_time);
+            dt = isNaN(d.getTime()) ? match.scheduled_time : d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        }
+
+        this.showModal(`
+            <div style="text-align: center; max-width: 420px; margin: 0 auto;">
+                <div style="font-family: var(--font-heading); font-size: 0.8rem; font-weight: 900; letter-spacing: 2px; color: var(--accent-cyan); text-transform: uppercase; margin-bottom: 1rem;">
+                    ${matchId ? `Match #${this.escapeHtml(String(matchId))}` : 'Match Details'}
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: center; margin-bottom: 1.5rem; background: rgba(0,0,0,0.4); padding: 1.25rem; border-radius: var(--radius-md); border: 1px solid var(--border-card);">
+                    <div style="text-align: center;">
+                        <div style="font-family: var(--font-heading); font-weight: 800; font-size: 1rem; color: #fff; margin-bottom: 0.25rem; word-break: break-word;">${this.escapeHtml(t1)}</div>
+                        ${isCompleted ? `<div style="font-family: var(--font-heading); font-size: 2.2rem; font-weight: 900; color: var(--accent-cyan);">${s1}</div>` : ''}
+                    </div>
+                    <div style="font-family: var(--font-heading); font-weight: 900; font-size: 1.1rem; color: var(--text-muted); text-align: center;">VS</div>
+                    <div style="text-align: center;">
+                        <div style="font-family: var(--font-heading); font-weight: 800; font-size: 1rem; color: #fff; margin-bottom: 0.25rem; word-break: break-word;">${this.escapeHtml(t2)}</div>
+                        ${isCompleted ? `<div style="font-family: var(--font-heading); font-size: 2.2rem; font-weight: 900; color: var(--accent-gold);">${s2}</div>` : ''}
+                    </div>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 0.5rem; text-align: left; font-size: 0.88rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; padding: 0.5rem 0.75rem; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm);">
+                        <span style="color: var(--text-muted); font-weight: 600;">Status</span>
+                        <span style="font-weight: 700; color: ${status === 'COMPLETED' ? 'var(--accent-green)' : (status === 'LIVE' ? 'var(--accent-red)' : 'var(--accent-gold)')}">${this.escapeHtml(status)}</span>
+                    </div>
+                    ${stage ? `<div style="display: flex; justify-content: space-between; padding: 0.5rem 0.75rem; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm);"><span style="color: var(--text-muted); font-weight: 600;">Stage</span><span style="font-weight: 700;">${this.escapeHtml(stage)}</span></div>` : ''}
+                    ${dt ? `<div style="display: flex; justify-content: space-between; padding: 0.5rem 0.75rem; background: rgba(0,0,0,0.3); border-radius: var(--radius-sm);"><span style="color: var(--text-muted); font-weight: 600;">Scheduled</span><span style="font-weight: 700;">${this.escapeHtml(dt)}</span></div>` : ''}
+                    ${isCompleted && match.winner_name ? `<div style="display: flex; justify-content: space-between; padding: 0.5rem 0.75rem; background: rgba(0,240,255,0.08); border: 1px solid rgba(0,240,255,0.25); border-radius: var(--radius-sm);"><span style="color: var(--accent-cyan); font-weight: 700;">🏆 Winner</span><span style="font-weight: 800; color: var(--accent-cyan);">${this.escapeHtml(match.winner_name)}</span></div>` : ''}
+                </div>
+
+                <button onclick="App.hideModal()" class="btn btn-secondary" style="width: 100%;">Close</button>
+            </div>
+        `);
+    },
+
+    // ═══════════════════════════════════════════════════════════
+    // MOBILE BRACKET ROUND TAB SWITCHING
+    // ═══════════════════════════════════════════════════════════
+    bracketShowRound(roundIdx) {
+        // Update tab buttons
+        document.querySelectorAll('.bracket-tab-btn').forEach((btn, i) => {
+            btn.classList.toggle('active', i === roundIdx);
+        });
+        // Show/hide columns (only relevant on mobile)
+        document.querySelectorAll('.bracket-round-column').forEach((col, i) => {
+            col.classList.toggle('mobile-round-hidden', i !== roundIdx);
+            col.classList.toggle('mobile-round-visible', i === roundIdx);
+        });
+    },
+
+    async changeBracketTournament(slug) {
         this.activeTournamentSlug = slug;
-        this.renderBracketsView();
+        const tree = document.getElementById('esports-bracket-tree');
+        if (tree) {
+            tree.innerHTML = `
+                <div style="padding: 4rem 2rem; text-align: center; width: 100%;">
+                    <div class="spinner" style="margin: 0 auto 1rem; border: 3px solid rgba(0,240,255,0.2); border-top-color: var(--accent-cyan); width: 36px; height: 36px; border-radius: 50%; animation: spin 0.8s linear infinite;"></div>
+                    <div style="color: var(--text-muted); font-size: 0.9rem; font-weight: 700; letter-spacing: 0.5px;">LOADING BRACKET DATA...</div>
+                </div>
+            `;
+        }
+        await this.renderBracketsView();
     },
 
     // RENDER LEADERBOARDS VIEW

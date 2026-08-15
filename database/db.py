@@ -1829,7 +1829,7 @@ def _get_tournament_bracket_tree_sync(tournament_id_or_slug: str) -> dict:
 
         # Fetch matches
         cursor.execute("""
-            SELECT m.match_id, m.tournament_id, m.stage_name, m.round_number, m.team1_id, m.team2_id,
+            SELECT m.match_id, m.public_match_id, m.tournament_id, m.stage_name, m.round_number, m.team1_id, m.team2_id,
                    m.team1_score, m.team2_score, m.winner_id, m.status, m.scheduled_time, m.lobby_info,
                    t1.name as team1_name, t1.logo_url as team1_logo,
                    t2.name as team2_name, t2.logo_url as team2_logo,
@@ -1865,14 +1865,21 @@ def _get_tournament_bracket_tree_sync(tournament_id_or_slug: str) -> dict:
 
         rounds_list = []
         for r_num in sorted(rounds_map.keys()):
-            if r_num == max_round:
-                r_name = "Final"
-            elif r_num == max_round - 1:
-                r_name = "Semifinals"
-            elif r_num == max_round - 2:
-                r_name = "Quarterfinals"
+            diff = max_round - r_num
+            if diff == 0:
+                r_name = "GRAND FINAL"
+            elif diff == 1:
+                r_name = "SEMI FINALS"
+            elif diff == 2:
+                r_name = "QUARTER FINALS"
+            elif diff == 3:
+                r_name = "ROUND OF 16"
+            elif diff == 4:
+                r_name = "ROUND OF 32"
+            elif diff == 5:
+                r_name = "ROUND OF 64"
             else:
-                r_name = f"Round {r_num}"
+                r_name = f"ROUND {r_num}"
 
             rounds_list.append({
                 "round_number": r_num,
