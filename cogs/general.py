@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 import config.settings as settings
 from database.db import get_bot_setting, set_bot_setting
+from typing import Union
 
 logger = logging.getLogger("GENEsportsBot")
 
@@ -111,7 +112,7 @@ class GeneralCog(commands.Cog):
                     guild.system_channel
                 )
 
-            if target_ch and isinstance(target_ch, discord.TextChannel):
+            if target_ch and isinstance(target_ch, (discord.TextChannel, discord.NewsChannel)):
                 embed = discord.Embed(
                     title=f"👋 Welcome to GEN Esports, {member.display_name}!",
                     description=(
@@ -139,11 +140,12 @@ class GeneralCog(commands.Cog):
         channel="Select your EXISTING Discord Welcome channel",
         enabled="Enable or disable welcome system notifications"
     )
+    @app_commands.channel_types(discord.ChannelType.text, discord.ChannelType.news)
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_welcome_cmd(
         self,
         interaction: discord.Interaction,
-        channel: discord.TextChannel,
+        channel: Union[discord.TextChannel, discord.NewsChannel],
         enabled: bool = True
     ):
         """Admin command to configure existing Welcome channel and persist ID to SQLite database."""
