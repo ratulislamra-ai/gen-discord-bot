@@ -663,17 +663,22 @@ class AdminReviewView(discord.ui.View):
                 logger.error(f"Error notifying ticket channel of approval: {e}")
 
         # DM Captain if possible
-        try:
             captain_user = await interaction.client.fetch_user(ticket["user_id"])
             if captain_user:
                 dm_embed = discord.Embed(
-                    title="🎉 Registration Approved!",
+                    title="✅ REGISTRATION CONFIRMED",
                     description=(
-                        f"Your registration for **{ticket['tournament_name']}** (Registration ID: `{ticket['registration_code']}`) has been **APPROVED**!\n\n"
-                        "Good luck in the tournament!"
+                        f"Your registration for:\n\n"
+                        f"🏆 **{ticket['tournament_name']}**\n\n"
+                        f"has been confirmed.\n\n"
+                        f"**Team:** {ticket['team_name']}\n"
+                        f"**Registration Code:** `{ticket['registration_code']}`\n\n"
+                        f"You can check your registration status here:\n"
+                        f"🌐 https://genesports.online/"
                     ),
                     color=discord.Color.from_rgb(0, 255, 163)
                 )
+                dm_embed.set_footer(text="GEN Esports Official Platform")
                 await captain_user.send(embed=dm_embed)
         except Exception as e:
             logger.warning(f"Could not send approval DM to user {ticket['user_id']}: {e}")

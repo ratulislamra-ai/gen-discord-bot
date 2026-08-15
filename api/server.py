@@ -8,6 +8,7 @@ import config.settings as settings
 from api.routes import router as legacy_api_router
 from api.routers.public import router as public_router
 from api.routers.admin import router as admin_router
+from api.auth import auth_router
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI web application."""
@@ -48,6 +49,7 @@ def create_app() -> FastAPI:
     app.include_router(legacy_api_router)
     app.include_router(public_router)
     app.include_router(admin_router)
+    app.include_router(auth_router)
 
     return app
 

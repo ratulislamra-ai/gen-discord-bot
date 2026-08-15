@@ -638,6 +638,45 @@ def _init_db_sync():
             );
         """)
 
+        # role_requests table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS role_requests (
+                request_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                requested_role_id TEXT NOT NULL,
+                requested_role_name TEXT NOT NULL,
+                status TEXT DEFAULT 'PENDING',
+                requested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                reviewed_at TIMESTAMP,
+                reviewed_by TEXT
+            );
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_role_req_user 
+            ON role_requests(user_id, status);
+        """)
+
+        # temporary_channels table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS temporary_channels (
+                channel_id TEXT PRIMARY KEY,
+                guild_id TEXT NOT NULL,
+                channel_type TEXT NOT NULL,
+                related_match_id INTEGER,
+                related_team_id INTEGER,
+                related_ticket_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                cleanup_eligible_at TIMESTAMP,
+                deleted_at TIMESTAMP,
+                cleanup_status TEXT DEFAULT 'ACTIVE'
+            );
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_temp_ch_status 
+            ON temporary_channels(cleanup_status);
+        """)
+
         # Safely migrate schema: add tournament & match columns if missing
         cursor.execute("PRAGMA table_info(tournaments);")
         t_cols = [col[1] for col in cursor.fetchall()]
@@ -4429,4 +4468,123 @@ def _validate_match_room_creation_sync(match_id: int) -> tuple[bool, str, dict |
 
 async def validate_match_room_creation(match_id: int) -> tuple[bool, str, dict | None]:
     return await asyncio.to_thread(_validate_match_room_creation_sync, match_id)
+
+
+# -------------------------------------------------------------
+# Role Requests Database Helpers
+# -------------------------------------------------------------
+
+def _create_role_request_sync(guild_id: str, user_id: str, requested_role_id: str, requested_role_name: str) -> tuple[bool, int | None, str]:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT request_id, status FROM role_requests 
+            WHERE guild_id = ? AND user_id = ? AND requested_role_id = ? AND status = 'PENDING';
+        """, (str(guild_id), str(user_id), str(requested_role_id)))
+        existing = cursor.fetchone()
+        if existing:
+            return False, dict(existing)["request_id"], "⚠️ You already have a pending role request for this role."
+
+        cursor.execute("""
+            INSERT INTO role_requests (guild_id, user_id, requested_role_id, requested_role_name, status)
+            VALUES (?, ?, ?, ?, 'PENDING');
+        """, (str(guild_id), str(user_id), str(requested_role_id), requested_role_name))
+        conn.commit()
+        req_id = cursor.lastrowid
+        return True, req_id, "✅ Role request submitted successfully for Admin approval."
+
+async def create_role_request(guild_id: str, user_id: str, requested_role_id: str, requested_role_name: str) -> tuple[bool, int | None, str]:
+    return await asyncio.to_thread(_create_role_request_sync, guild_id, user_id, requested_role_id, requested_role_name)
+
+def _get_role_request_sync(request_id: int) -> dict | None:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM role_requests WHERE request_id = ?;", (request_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+async def get_role_request(request_id: int) -> dict | None:
+    return await asyncio.to_thread(_get_role_request_sync, request_id)
+
+def _update_role_request_status_sync(request_id: int, status: str, reviewed_by: str) -> bool:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE role_requests 
+            SET status = ?, reviewed_at = CURRENT_TIMESTAMP, reviewed_by = ?
+            WHERE request_id = ?;
+        """, (status, str(reviewed_by), request_id))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def update_role_request_status(request_id: int, status: str, reviewed_by: str) -> bool:
+    return await asyncio.to_thread(_update_role_request_status_sync, request_id, status, reviewed_by)
+
+
+# -------------------------------------------------------------
+# Temporary Channel Lifecycle Database Helpers
+# -------------------------------------------------------------
+
+def _track_temporary_channel_sync(channel_id: str, guild_id: str, channel_type: str, related_match_id: int | None = None, related_team_id: int | None = None, related_ticket_id: int | None = None) -> bool:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT OR REPLACE INTO temporary_channels 
+            (channel_id, guild_id, channel_type, related_match_id, related_team_id, related_ticket_id, cleanup_status)
+            VALUES (?, ?, ?, ?, ?, ?, 'ACTIVE');
+        """, (str(channel_id), str(guild_id), channel_type, related_match_id, related_team_id, related_ticket_id))
+        conn.commit()
+        return True
+
+async def track_temporary_channel(channel_id: str, guild_id: str, channel_type: str, related_match_id: int | None = None, related_team_id: int | None = None, related_ticket_id: int | None = None) -> bool:
+    return await asyncio.to_thread(_track_temporary_channel_sync, channel_id, guild_id, channel_type, related_match_id, related_team_id, related_ticket_id)
+
+def _mark_channel_cleanup_eligible_sync(channel_id: str) -> bool:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE temporary_channels 
+            SET cleanup_status = 'ELIGIBLE', cleanup_eligible_at = CURRENT_TIMESTAMP
+            WHERE channel_id = ? AND cleanup_status = 'ACTIVE';
+        """, (str(channel_id),))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def mark_channel_cleanup_eligible(channel_id: str) -> bool:
+    return await asyncio.to_thread(_mark_channel_cleanup_eligible_sync, channel_id)
+
+def _get_eligible_cleanup_channels_sync(channel_type: str | None = None) -> list[dict]:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        if channel_type:
+            cursor.execute("SELECT * FROM temporary_channels WHERE cleanup_status = 'ELIGIBLE' AND channel_type = ?;", (channel_type,))
+        else:
+            cursor.execute("SELECT * FROM temporary_channels WHERE cleanup_status = 'ELIGIBLE';")
+        rows = cursor.fetchall()
+        return [dict(r) for r in rows]
+
+async def get_eligible_cleanup_channels(channel_type: str | None = None) -> list[dict]:
+    return await asyncio.to_thread(_get_eligible_cleanup_channels_sync, channel_type)
+
+def _update_channel_cleanup_status_sync(channel_id: str, cleanup_status: str) -> bool:
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        if cleanup_status == "DELETED":
+            cursor.execute("""
+                UPDATE temporary_channels 
+                SET cleanup_status = ?, deleted_at = CURRENT_TIMESTAMP
+                WHERE channel_id = ?;
+            """, (cleanup_status, str(channel_id)))
+        else:
+            cursor.execute("""
+                UPDATE temporary_channels 
+                SET cleanup_status = ?
+                WHERE channel_id = ?;
+            """, (cleanup_status, str(channel_id)))
+        conn.commit()
+        return cursor.rowcount > 0
+
+async def update_channel_cleanup_status(channel_id: str, cleanup_status: str) -> bool:
+    return await asyncio.to_thread(_update_channel_cleanup_status_sync, channel_id, cleanup_status)
+
 

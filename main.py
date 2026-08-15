@@ -38,6 +38,7 @@ class GENBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.members = True
 
         super().__init__(
             command_prefix="!",
@@ -68,15 +69,18 @@ class GENBot(commands.Bot):
         self.add_view(InvitationView(0))
         self.add_view(SupportPanel())
         self.add_view(SupportTicketControlView())
-        self.add_view(MatchControlView())
-        from cogs.general import CommunityWelcomeView
+        from cogs.general import CommunityWelcomeView, RoleSelectionPanel, AdminRoleReviewView
+        from cogs.cleanup import CleanupPromptView
         self.add_view(CommunityWelcomeView())
+        self.add_view(RoleSelectionPanel())
+        self.add_view(AdminRoleReviewView())
+        self.add_view(CleanupPromptView(""))
         self.add_view(MatchCenterMainView())
-        logger.info("Registered persistent UI views including CommunityWelcomeView, MatchCenterMainView, SupportPanel, SupportTicketControlView, and MatchControlView.")
+        logger.info("Registered persistent UI views including CommunityWelcomeView, RoleSelectionPanel, AdminRoleReviewView, CleanupPromptView, MatchCenterMainView, SupportPanel, SupportTicketControlView, and MatchControlView.")
 
         # 3. Load extension cogs
         logger.info("Loading bot extensions (cogs)...")
-        cogs = ["cogs.general", "cogs.registration", "cogs.support", "cogs.identity", "cogs.matches", "cogs.match_center"]
+        cogs = ["cogs.general", "cogs.registration", "cogs.support", "cogs.identity", "cogs.matches", "cogs.match_center", "cogs.cleanup"]
         for cog in cogs:
             try:
                 await self.load_extension(cog)

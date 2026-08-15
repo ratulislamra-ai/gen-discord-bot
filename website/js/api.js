@@ -15,8 +15,61 @@ const Api = {
         } catch (err) {
             console.error('Failed to fetch public config:', err);
             return {
-                discord_invite_url: 'https://discord.gg/genesports'
+                discord_invite_url: 'https://discord.gg/G568r5MFqB'
             };
+        }
+    },
+
+    /**
+     * Auth & Session API Methods
+     */
+    async getAuthMe(userId) {
+        try {
+            const url = userId ? `${API_BASE}/auth/me?user_id=${encodeURIComponent(userId)}` : `${API_BASE}/auth/me`;
+            const res = await fetch(url, { credentials: 'include' });
+            if (!res.ok) return { authenticated: false };
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to fetch auth me:', err);
+            return { authenticated: false };
+        }
+    },
+
+    loginWithDiscord() {
+        window.location.href = `${API_BASE}/auth/discord/login`;
+    },
+
+    async logout() {
+        try {
+            await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+        } catch (err) {
+            console.error('Logout error:', err);
+        }
+    },
+
+    /**
+     * Upload match result evidence screenshot (PNG, JPG, WEBP <= 10MB)
+     */
+    async uploadMatchEvidence(file, matchId = null) {
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            if (matchId) formData.append('match_id', matchId);
+
+            const res = await fetch(`${API_BASE}/public/matches/upload-evidence`, {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                throw new Error(errData.detail || `Upload failed with HTTP ${res.status}`);
+            }
+
+            return await res.json();
+        } catch (err) {
+            console.error('Failed to upload evidence:', err);
+            throw err;
         }
     },
 

@@ -98,8 +98,8 @@ const App = {
     openDiscordInvite() {
         const url = (this.discordInviteUrl && this.discordInviteUrl.startsWith('http')) 
             ? this.discordInviteUrl 
-            : 'https://discord.gg/genesports';
-        window.open(url, '_blank', 'noopener');
+            : 'https://discord.gg/G568r5MFqB';
+        window.open(url, '_blank', 'noopener,noreferrer');
     },
 
     bindEvents() {
@@ -1362,22 +1362,45 @@ const App = {
     async renderDashboardView() {
         const container = document.getElementById('app-content');
 
+        // Check OAuth session first if userDiscordId is not set
+        if (!this.userDiscordId) {
+            const authRes = await Api.getAuthMe();
+            if (authRes && authRes.authenticated && authRes.user_id) {
+                this.userDiscordId = authRes.user_id;
+            }
+        }
+
         if (!this.userDiscordId) {
             container.innerHTML = `
-                <div style="max-width: 450px; margin: 4rem auto;" class="glass-panel">
-                    <div style="text-align: center; margin-bottom: 1.5rem;">
-                        <div style="font-size: 3rem; margin-bottom: 0.5rem;">👤</div>
-                        <h2 style="font-family: var(--font-heading); font-size: 1.8rem;">Player Dashboard</h2>
-                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin-top: 0.25rem;">Enter your Discord User ID or Code to view your profile & teams.</p>
+                <div style="max-width: 500px; margin: 4rem auto;" class="glass-panel">
+                    <div style="text-align: center; margin-bottom: 2rem;">
+                        <div style="font-size: 3.5rem; margin-bottom: 0.5rem;">🎮</div>
+                        <h2 style="font-family: var(--font-heading); font-size: 2rem;">PLAYER DASHBOARD LOGIN</h2>
+                        <p style="color: var(--text-secondary); font-size: 0.95rem; margin-top: 0.5rem; line-height: 1.5;">
+                            Access your GEN Esports account, active team roster, registered tournaments, upcoming matches & results securely.
+                        </p>
+                    </div>
+
+                    <div style="margin-bottom: 2rem;">
+                        <button onclick="Api.loginWithDiscord()" class="btn btn-discord btn-lg" style="width: 100%; justify-content: center; font-size: 1.1rem; padding: 0.9rem;">
+                            <svg class="icon-discord" viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+                                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128c.126-.093.252-.19.373-.287a.075.075 0 0 1 .078-.01c3.927 1.793 8.18 1.793 12.061 0a.075.075 0 0 1 .079.009c.12.098.245.195.372.288a.077.077 0 0 1-.006.128 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.028zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+                            </svg>
+                            <span>LOGIN WITH DISCORD</span>
+                        </button>
+                    </div>
+
+                    <div style="position: relative; text-align: center; margin: 1.5rem 0;">
+                        <span style="background: var(--bg-card); padding: 0 10px; color: var(--text-muted); font-size: 0.85rem;">OR ENTER DISCORD ID</span>
+                        <div style="position: absolute; top: 50%; left: 0; right: 0; border-top: 1px solid var(--border-card); z-index: -1;"></div>
                     </div>
 
                     <form onsubmit="App.loginUserDashboard(event)">
-                        <div class="form-group" style="margin-bottom: 1.5rem;">
-                            <label>Discord User ID / Player ID</label>
+                        <div class="form-group" style="margin-bottom: 1.25rem;">
                             <input type="text" id="user-id-input" class="form-input" placeholder="e.g. 123456789012345678" required>
                         </div>
-                        <button type="submit" class="btn btn-primary" style="width: 100%;">
-                            🔓 Access Dashboard
+                        <button type="submit" class="btn btn-secondary" style="width: 100%;">
+                            🔑 Quick Access by User ID
                         </button>
                     </form>
                 </div>
@@ -1389,6 +1412,18 @@ const App = {
         const profile = data ? data.profile : null;
         const regs = data ? (data.registrations || []) : [];
         const cases = data ? (data.cases || []) : [];
+        const matches = await Api.getMatches();
+        const userMatches = matches ? matches.filter(m => 
+            (m.team1_id && profile && profile.teams && profile.teams.some(t => t.team_id === m.team1_id)) ||
+            (m.team2_id && profile && profile.teams && profile.teams.some(t => t.team_id === m.team2_id))
+        ) : [];
+
+        const getStatusBadge = (status) => {
+            if (status === 'APPROVED') return '<span class="badge badge-open">🟢 APPROVED</span>';
+            if (status === 'PENDING') return '<span class="badge" style="background: rgba(255, 193, 7, 0.2); color: #ffc107; border: 1px solid #ffc107;">🟡 PENDING</span>';
+            if (status === 'REJECTED') return '<span class="badge badge-closed">🔴 REJECTED</span>';
+            return '<span class="badge badge-closed">⚪ CANCELLED</span>';
+        };
 
         container.innerHTML = `
             <div style="margin-bottom: 2.5rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
@@ -1399,7 +1434,7 @@ const App = {
                     </h1>
                 </div>
                 <button onclick="App.logoutUserDashboard()" class="btn btn-secondary" style="font-size: 0.85rem;">
-                    🔒 Switch Account
+                    🔒 Logout / Switch Account
                 </button>
             </div>
 
@@ -1407,35 +1442,42 @@ const App = {
                 <div class="stat-box"><div class="stat-val" style="color: var(--accent-cyan);">${profile ? this.escapeHtml(profile.public_id) : 'GEN-P-000000'}</div><div class="stat-lbl">Public ID</div></div>
                 <div class="stat-box"><div class="stat-val" style="color: var(--accent-gold);">${regs.length}</div><div class="stat-lbl">Registrations</div></div>
                 <div class="stat-box"><div class="stat-val" style="color: var(--accent-green);">${profile && profile.teams ? profile.teams.length : 0}</div><div class="stat-lbl">Active Teams</div></div>
-                <div class="stat-box"><div class="stat-val">${cases.length}</div><div class="stat-lbl">Support Cases</div></div>
+                <div class="stat-box"><div class="stat-val">${userMatches.length}</div><div class="stat-lbl">Upcoming Matches</div></div>
             </div>
 
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
                 <div class="glass-panel" style="padding: 1.5rem;">
-                    <h3 style="font-family: var(--font-heading); font-size: 1.3rem; margin-bottom: 1rem;">📋 My Registrations (${regs.length})</h3>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.3rem; margin-bottom: 1rem;">📋 Tournament Registrations (${regs.length})</h3>
                     <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                        ${regs.length === 0 ? '<div style="color: var(--text-muted);">No registrations found. Register via Discord!</div>' : regs.map(r => `
-                            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
-                                <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.25rem;">
-                                    <span>🛡️ ${this.escapeHtml(r.team_name)}</span>
-                                    <span class="badge ${r.status === 'APPROVED' ? 'badge-open' : 'badge-closed'}">${r.status}</span>
+                        ${regs.length === 0 ? '<div style="color: var(--text-muted);">No registrations found. Join a tournament via Discord!</div>' : regs.map(r => `
+                            <div style="background: rgba(0,0,0,0.3); padding: 0.9rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                                <div style="display: flex; justify-content: space-between; align-items: center; font-weight: 700; margin-bottom: 0.5rem;">
+                                    <span style="font-size: 1.05rem;">🛡️ ${this.escapeHtml(r.team_name)}</span>
+                                    ${getStatusBadge(r.status)}
                                 </div>
-                                <div style="font-size: 0.8rem; color: var(--text-secondary);">🏆 ${this.escapeHtml(r.tournament_name)} • Code: <code>${this.escapeHtml(r.registration_code || r.ticket_id)}</code></div>
+                                <div style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.25rem;">🏆 ${this.escapeHtml(r.tournament_name)}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); display: flex; justify-content: space-between;">
+                                    <span>Code: <code>${this.escapeHtml(r.registration_code || r.ticket_id)}</code></span>
+                                    <span>Date: ${new Date(r.submitted_at || Date.now()).toLocaleDateString()}</span>
+                                </div>
                             </div>
                         `).join('')}
                     </div>
                 </div>
 
                 <div class="glass-panel" style="padding: 1.5rem;">
-                    <h3 style="font-family: var(--font-heading); font-size: 1.3rem; margin-bottom: 1rem;">🎧 My Support Cases (${cases.length})</h3>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.3rem; margin-bottom: 1rem;">⚔️ Upcoming Matches & Schedule (${userMatches.length})</h3>
                     <div style="display: flex; flex-direction: column; gap: 0.75rem;">
-                        ${cases.length === 0 ? '<div style="color: var(--text-muted);">No support cases on record.</div>' : cases.map(c => `
-                            <div style="background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
-                                <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.25rem;">
-                                    <span>🎧 Case #${c.case_id}</span>
-                                    <span class="badge ${c.status === 'CLOSED' ? 'badge-closed' : 'badge-open'}">${c.status}</span>
+                        ${userMatches.length === 0 ? '<div style="color: var(--text-muted);">No upcoming matches scheduled.</div>' : userMatches.map(m => `
+                            <div style="background: rgba(0,0,0,0.3); padding: 0.9rem; border-radius: var(--radius-sm); border: 1px solid var(--border-card);">
+                                <div style="display: flex; justify-content: space-between; font-weight: 700; margin-bottom: 0.3rem;">
+                                    <span>⚔️ ${this.escapeHtml(m.team1_name || 'TBD')} vs ${this.escapeHtml(m.team2_name || 'TBD')}</span>
+                                    <span class="badge badge-open">${m.status || 'SCHEDULED'}</span>
                                 </div>
-                                <div style="font-size: 0.8rem; color: var(--text-secondary);">📂 Category: <code>${this.escapeHtml(c.ticket_type)}</code> • Priority: <code>${this.escapeHtml(c.priority)}</code></div>
+                                <div style="font-size: 0.85rem; color: var(--text-secondary);">🏆 ${this.escapeHtml(m.tournament_name || 'Tournament')} • Stage: ${this.escapeHtml(m.stage_name || 'Stage')}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.4rem; display: flex; gap: 0.5rem;">
+                                    <button onclick="App.openDiscordInvite()" class="btn btn-secondary btn-sm">🏠 OPEN MATCH ROOM</button>
+                                </div>
                             </div>
                         `).join('')}
                     </div>
@@ -1455,9 +1497,10 @@ const App = {
         }
     },
 
-    logoutUserDashboard() {
+    async logoutUserDashboard() {
         this.userDiscordId = '';
         localStorage.removeItem('gen_user_discord_id');
+        await Api.logout();
         this.renderDashboardView();
     },
 
