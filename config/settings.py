@@ -26,7 +26,12 @@ CORS_ORIGINS_RAW = os.getenv("CORS_ORIGINS", "http://localhost:3000,http://local
 CORS_ORIGINS = [origin.strip() for origin in CORS_ORIGINS_RAW.split(",") if origin.strip()]
 
 # Discord Server & Community Configuration
-DISCORD_INVITE_URL = os.getenv("DISCORD_INVITE_URL", "https://discord.gg/genesports")
+OFFICIAL_DISCORD_INVITE_URL = "https://discord.gg/c4YuB5GmbS"
+_raw_invite = os.getenv("DISCORD_INVITE_URL", OFFICIAL_DISCORD_INVITE_URL)
+if not _raw_invite or "G568r5MFqB" in _raw_invite or "genesports" in _raw_invite or "your_invite" in _raw_invite:
+    DISCORD_INVITE_URL = OFFICIAL_DISCORD_INVITE_URL
+else:
+    DISCORD_INVITE_URL = _raw_invite
 DISCORD_SERVER_ID = os.getenv("DISCORD_SERVER_ID", "")
 
 # Configured Channel IDs

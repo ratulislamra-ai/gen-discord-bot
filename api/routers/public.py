@@ -95,7 +95,7 @@ async def confirm_match_score_api(match_id: int, payload: Dict[str, Any]):
 async def get_public_config():
     """Return public platform configuration (e.g. Discord invite URL)."""
     return {
-        "discord_invite_url": settings.DISCORD_INVITE_URL or "https://discord.gg/genesports"
+        "discord_invite_url": settings.DISCORD_INVITE_URL or "https://discord.gg/c4YuB5GmbS"
     }
 
 @router.get("/tournaments", response_model=List[Dict[str, Any]], summary="Get Detailed Tournament List")

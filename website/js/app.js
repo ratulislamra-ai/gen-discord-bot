@@ -88,17 +88,25 @@ const App = {
     async loadConfig() {
         try {
             const config = await Api.getConfig();
-            this.discordInviteUrl = (config && config.discord_invite_url) || '';
+            let url = (config && config.discord_invite_url) || '';
+            if (!url || url.includes('G568r5MFqB') || url.includes('genesports')) {
+                url = 'https://discord.gg/c4YuB5GmbS';
+            }
+            this.discordInviteUrl = url;
         } catch (e) {
             console.warn('Failed to fetch config:', e);
-            this.discordInviteUrl = '';
+            this.discordInviteUrl = 'https://discord.gg/c4YuB5GmbS';
         }
     },
 
     openDiscordInvite() {
-        const url = (this.discordInviteUrl && this.discordInviteUrl.startsWith('http')) 
+        const officialUrl = 'https://discord.gg/c4YuB5GmbS';
+        let url = (this.discordInviteUrl && this.discordInviteUrl.startsWith('http')) 
             ? this.discordInviteUrl 
-            : 'https://discord.gg/G568r5MFqB';
+            : officialUrl;
+        if (url.includes('G568r5MFqB') || url.includes('genesports')) {
+            url = officialUrl;
+        }
         window.open(url, '_blank', 'noopener,noreferrer');
     },
 

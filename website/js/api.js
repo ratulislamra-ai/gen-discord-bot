@@ -15,7 +15,7 @@ const Api = {
         } catch (err) {
             console.error('Failed to fetch public config:', err);
             return {
-                discord_invite_url: 'https://discord.gg/G568r5MFqB'
+                discord_invite_url: 'https://discord.gg/c4YuB5GmbS'
             };
         }
     },
