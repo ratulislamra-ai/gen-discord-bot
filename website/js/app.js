@@ -33,17 +33,41 @@ const App = {
 
     async init() {
         this.bindEvents();
+        window.addEventListener('hashchange', () => this.handleHashRoute());
         try {
             await this.loadConfig();
         } catch (e) {
             console.warn('Config load notice:', e);
         }
-        try {
-            await this.renderView('home');
-        } catch (e) {
-            console.error('Failed initial view render:', e);
+        if (window.location.hash) {
+            await this.handleHashRoute();
+        } else {
+            try {
+                await this.renderView('home');
+            } catch (e) {
+                console.error('Failed initial view render:', e);
+            }
         }
         this.startAutoRefresh();
+    },
+
+    handleHashRoute() {
+        const hash = window.location.hash || '';
+        if (!hash.startsWith('#')) return;
+
+        const [viewPart, queryPart] = hash.substring(1).split('?');
+        const viewName = viewPart.replace(/^\//, '');
+
+        if (['home', 'tournaments', 'teams', 'players', 'matches', 'brackets', 'leaderboards', 'dashboard', 'admin'].includes(viewName)) {
+            if (queryPart) {
+                const params = new URLSearchParams(queryPart);
+                const tourneyParam = params.get('tournament') || params.get('slug');
+                if (tourneyParam) {
+                    this.activeTournamentSlug = tourneyParam;
+                }
+            }
+            return this.renderView(viewName);
+        }
     },
 
     startAutoRefresh() {
@@ -1733,7 +1757,7 @@ const App = {
                                                 <option value="COMPLETED">COMPLETED</option>
                                                 <option value="CANCELLED">CANCELLED</option>
                                             </select>
-                                            <button onclick="App.handleGenerateBracket('${t.tournament_id}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" title="Generate or Regenerate Bracket">🏆 Bracket</button>
+                                            <button onclick="App.handleAdminBracketButtonClick('${t.tournament_id}')" class="btn btn-primary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;" title="View or Generate Bracket">🏆 Bracket</button>
                                             <button onclick="App.showCancelModal(${t.tournament_id})" class="btn btn-danger" style="padding: 0.3rem 0.5rem; font-size: 0.75rem; background: var(--accent-red); color:#fff;" title="Cancel Tournament">❌ Cancel</button>
                                         </td>
                                     </tr>
@@ -2014,15 +2038,95 @@ const App = {
         }
     },
 
-    async handleGenerateBracket(id) {
-        try {
-            await Api.generateBracket(this.adminApiKey, id);
-            this.showToast('🏆 Tournament bracket generated successfully!', 'success');
-            this.adminTab = 'matches';
-            await this.refreshAdminData();
-        } catch (err) {
-            this.showToast('✕ Error generating bracket: ' + err.message, 'error');
+    async handleAdminBracketButtonClick(tournamentId) {
+        console.log('Admin Bracket clicked for tournament ID:', tournamentId);
+        if (!tournamentId) {
+            this.showToast('✕ Invalid tournament ID', 'error');
+            return;
         }
+
+        try {
+            // Fetch bracket status for this tournament
+            const bracketData = await Api.getTournamentBracket(tournamentId);
+            const hasBracket = bracketData && bracketData.has_bracket && bracketData.rounds && bracketData.rounds.length > 0;
+
+            if (hasBracket) {
+                // Bracket already exists -> Open bracket view directly for this tournament
+                const targetSlug = (bracketData.tournament && bracketData.tournament.slug) ? bracketData.tournament.slug : String(tournamentId);
+                this.activeTournamentSlug = targetSlug;
+                this.showToast(`🏆 Opening bracket for tournament #${tournamentId}`, 'info');
+                await this.renderView('brackets');
+                window.location.hash = `#brackets?tournament=${encodeURIComponent(targetSlug)}`;
+                return;
+            }
+
+            // Bracket does NOT exist -> Fetch tournament details and show confirmation modal
+            let tInfo = bracketData ? bracketData.tournament : null;
+            if (!tInfo) {
+                const tournaments = await Api.getTournaments().catch(() => []);
+                tInfo = tournaments.find(t => String(t.tournament_id) === String(tournamentId) || t.slug === String(tournamentId));
+            }
+
+            const title = tInfo ? (tInfo.title || tInfo.name || `Tournament #${tournamentId}`) : `Tournament #${tournamentId}`;
+            const approvedTeams = tInfo ? (tInfo.registered_teams_count || tInfo.current_approved_team_count || 0) : 0;
+            const maxTeams = tInfo ? (tInfo.max_teams || 8) : 8;
+            const format = tInfo ? (tInfo.format || 'Single Elimination') : 'Single Elimination';
+
+            this.showModal(`
+                <div style="text-align: center; padding: 0.5rem;">
+                    <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🏆</div>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.5rem; color: #fff; margin-bottom: 1rem;">GENERATE TOURNAMENT BRACKET</h3>
+                    <div class="glass-panel" style="padding: 1.25rem; margin-bottom: 1.5rem; text-align: left; background: rgba(0,0,0,0.4); border-radius: var(--radius-md);">
+                        <p style="margin-bottom: 0.5rem;"><strong>Tournament:</strong> <span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(title)}</span></p>
+                        <p style="margin-bottom: 0.5rem;"><strong>Teams:</strong> <span style="color: var(--accent-green); font-weight: 700;">${approvedTeams} / ${maxTeams} Approved</span></p>
+                        <p style="margin-bottom: 0;"><strong>Format:</strong> <span style="color: var(--accent-gold); font-weight: 700;">${this.escapeHtml(format)}</span></p>
+                    </div>
+                    <div style="display: flex; gap: 0.75rem; justify-content: center;">
+                        <button type="button" onclick="App.hideModal()" class="btn btn-secondary" style="padding: 0.5rem 1.2rem;">Cancel</button>
+                        <button type="button" onclick="App.confirmGenerateBracket('${this.escapeHtml(String(tournamentId))}')" class="btn btn-primary" style="padding: 0.5rem 1.2rem; font-weight: 700;">🏆 GENERATE BRACKET</button>
+                    </div>
+                </div>
+            `);
+        } catch (err) {
+            console.error('Error in handleAdminBracketButtonClick:', err);
+            this.showModal(`
+                <div style="text-align: center; padding: 1rem;">
+                    <div style="font-size: 3rem; margin-bottom: 0.5rem;">❌</div>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.4rem; color: var(--accent-red); margin-bottom: 0.75rem;">Unable to load bracket</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;"><strong>Reason:</strong> ${this.escapeHtml(err.message || 'Unknown technical error')}</p>
+                    <button type="button" onclick="App.hideModal()" class="btn btn-secondary">Close</button>
+                </div>
+            `);
+        }
+    },
+
+    async confirmGenerateBracket(tournamentId) {
+        console.log('Confirming bracket generation for tournament ID:', tournamentId);
+        try {
+            this.hideModal();
+            this.showToast('⏳ Generating tournament bracket...', 'info');
+            await Api.generateBracket(this.adminApiKey, tournamentId);
+            this.showToast('🏆 Tournament bracket generated successfully!', 'success');
+            
+            // Set active tournament and switch to bracket view
+            this.activeTournamentSlug = String(tournamentId);
+            await this.renderView('brackets');
+            window.location.hash = `#brackets?tournament=${encodeURIComponent(tournamentId)}`;
+        } catch (err) {
+            console.error('Error generating bracket:', err);
+            this.showModal(`
+                <div style="text-align: center; padding: 1rem;">
+                    <div style="font-size: 3rem; margin-bottom: 0.5rem;">❌</div>
+                    <h3 style="font-family: var(--font-heading); font-size: 1.4rem; color: var(--accent-red); margin-bottom: 0.75rem;">Unable to generate bracket</h3>
+                    <p style="color: var(--text-secondary); margin-bottom: 1.5rem;"><strong>Reason:</strong> ${this.escapeHtml(err.message || 'Unknown technical error')}</p>
+                    <button type="button" onclick="App.hideModal()" class="btn btn-secondary">Close</button>
+                </div>
+            `);
+        }
+    },
+
+    async handleGenerateBracket(id) {
+        return this.handleAdminBracketButtonClick(id);
     },
 
     showScheduleModal(matchId, currentScheduled = '', currentLobby = '') {

@@ -244,5 +244,48 @@ class TestEsportsSystem(unittest.TestCase):
             self.assertEqual(m_dict["team2_name"], "Team Beta")
             self.assertEqual(m_dict["tournament_name"], "GEN Valorant Championship")
 
+    def test_R_8_team_bracket_generation(self):
+        """Scenario R: Verify 8-team single elimination bracket generation produces Quarterfinals, Semifinals, and Final."""
+        from database.db import generate_tournament_bracket, get_tournament_bracket_tree
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO tournaments (tournament_id, slug, title, game_type, status, max_teams, format)
+                VALUES (600, 'gen-8-team-test', 'GEN 8-Team Bracket Test', 'VALORANT', 'REGISTRATION_CLOSED', 8, 'Single Elimination');
+            """)
+            for i in range(1, 9):
+                t_name = f"Team {i}"
+                cursor.execute("""
+                    INSERT INTO tickets (ticket_id, user_id, guild_id, channel_id, team_name, tournament_name, captain_discord_id, status)
+                    VALUES (?, ?, 1, 1, ?, 'GEN 8-Team Bracket Test', ?, 'APPROVED');
+                """, (600 + i, 1000 + i, t_name, str(1000 + i)))
+            conn.commit()
+
+        matches = self.run_async(generate_tournament_bracket("600"))
+        self.assertTrue(len(matches) > 0)
+
+        tree = self.run_async(get_tournament_bracket_tree("600"))
+        self.assertTrue(tree["has_bracket"])
+        rounds = tree["rounds"]
+        self.assertEqual(len(rounds), 3) # Quarter Finals, Semi Finals, Final
+        self.assertEqual(rounds[0]["round_name"], "QUARTER FINALS")
+        self.assertEqual(len(rounds[0]["matches"]), 4)
+        self.assertEqual(rounds[1]["round_name"], "SEMI FINALS")
+        self.assertEqual(len(rounds[1]["matches"]), 2)
+        self.assertEqual(rounds[2]["round_name"], "GRAND FINAL")
+        self.assertEqual(len(rounds[2]["matches"]), 1)
+
+    def test_S_bracket_generation_idempotency(self):
+        """Scenario S: Verify that calling generate_tournament_bracket multiple times is idempotent."""
+        from database.db import generate_tournament_bracket, get_tournament_bracket_tree
+        matches_first = self.run_async(generate_tournament_bracket("600"))
+        matches_second = self.run_async(generate_tournament_bracket("600"))
+        self.assertEqual(len(matches_first), len(matches_second))
+
+        tree = self.run_async(get_tournament_bracket_tree("600"))
+        # Verify exactly 7 matches in total (4 + 2 + 1)
+        total_matches = sum(len(r["matches"]) for r in tree["rounds"])
+        self.assertEqual(total_matches, 7)
+
 if __name__ == "__main__":
     unittest.main()

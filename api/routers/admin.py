@@ -328,6 +328,7 @@ async def generate_bracket_api(tournament_id: str):
     """Generate elimination bracket from approved teams."""
     try:
         matches = await generate_tournament_bracket(tournament_id)
+        await log_admin_action("API_ADMIN", "GENERATE_BRACKET", details=f"Generated bracket for tournament #{tournament_id}")
         return {"message": "Tournament bracket generated successfully.", "matches": matches}
     except ValueError as ve:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(ve))

@@ -1600,6 +1600,11 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
         tournament = dict(t_row)
         tournament_id = tournament["tournament_id"]
 
+        # Check if bracket/matches already exist for this tournament (Idempotency)
+        cursor.execute("SELECT COUNT(*) FROM matches WHERE tournament_id = ?;", (tournament_id,))
+        if cursor.fetchone()[0] > 0:
+            return _get_tournament_matches_sync(str(tournament_id))
+
         # Fetch approved teams for this tournament
         approved_teams = _get_approved_teams_by_tournament_sync(tournament["title"])
         if not approved_teams:
@@ -1629,7 +1634,7 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
         cursor.execute("SELECT team_id, seed_number FROM team_seeds WHERE tournament_id = ? ORDER BY seed_number ASC;", (tournament_id,))
         seed_rows = cursor.fetchall()
         if not seed_rows:
-            _generate_tournament_seeds_sync(tournament_id, "RANDOM")
+            _generate_tournament_seeds_sync(tournament_id, "RANDOM", existing_conn=conn)
             cursor.execute("SELECT team_id, seed_number FROM team_seeds WHERE tournament_id = ? ORDER BY seed_number ASC;", (tournament_id,))
             seed_rows = cursor.fetchall()
 
@@ -1644,8 +1649,8 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
         num_teams = len(team_ids)
 
         # Generate Round 1 matches
-        created_matches = []
         round_1_match_ids = []
+        r1_stage = "Final" if num_teams <= 2 else ("Semifinals" if num_teams <= 4 else ("Quarterfinals" if num_teams <= 8 else "Round 1"))
 
         for i in range(0, num_teams, 2):
             team1_id = team_ids[i]
@@ -1656,7 +1661,7 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
             cursor.execute("""
                 INSERT INTO matches (tournament_id, stage_name, round_number, team1_id, team2_id, status, winner_id)
                 VALUES (?, ?, 1, ?, ?, ?, ?);
-            """, (tournament_id, "Quarterfinals" if num_teams <= 4 else "Round 1", team1_id, team2_id, status, winner_id))
+            """, (tournament_id, r1_stage, team1_id, team2_id, status, winner_id))
             match_id = cursor.lastrowid
             round_1_match_ids.append(match_id)
 
@@ -1665,18 +1670,35 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
                 VALUES (?, 1, ?, ?);
             """, (tournament_id, match_id, i // 2))
 
-        # Generate Round 2 (Semifinals / Finals placeholder)
-        if len(round_1_match_ids) > 1:
-            for j in range(0, len(round_1_match_ids), 2):
+        # Dynamically generate subsequent rounds (Round 2, 3, ... up to Final)
+        current_round_match_count = len(round_1_match_ids)
+        current_round_num = 1
+
+        while current_round_match_count > 1:
+            next_round_match_count = (current_round_match_count + 1) // 2
+            current_round_num += 1
+
+            if next_round_match_count == 1:
+                stage_name = "Final"
+            elif next_round_match_count == 2:
+                stage_name = "Semifinals"
+            elif next_round_match_count == 4:
+                stage_name = "Quarterfinals"
+            else:
+                stage_name = f"Round {current_round_num}"
+
+            for j in range(next_round_match_count):
                 cursor.execute("""
                     INSERT INTO matches (tournament_id, stage_name, round_number, status)
-                    VALUES (?, ?, 2, 'SCHEDULED');
-                """, (tournament_id, "Semifinals" if len(round_1_match_ids) > 2 else "Finals"))
+                    VALUES (?, ?, ?, 'SCHEDULED');
+                """, (tournament_id, stage_name, current_round_num))
                 match_id = cursor.lastrowid
                 cursor.execute("""
                     INSERT INTO brackets (tournament_id, round_number, match_id, position_index)
-                    VALUES (?, 2, ?, ?);
-                """, (tournament_id, match_id, j // 2))
+                    VALUES (?, ?, ?, ?);
+                """, (tournament_id, current_round_num, match_id, j))
+
+            current_round_match_count = next_round_match_count
 
         # Update tournament status to ONGOING
         cursor.execute("UPDATE tournaments SET status = 'ONGOING' WHERE tournament_id = ?;", (tournament_id,))
@@ -3085,9 +3107,16 @@ async def confirm_opponent_match_score(match_id: int, confirming_user_id: str, a
 import json
 import random
 
-def _generate_tournament_seeds_sync(tournament_id: int, method: str = "RANDOM") -> list[dict]:
+def _generate_tournament_seeds_sync(tournament_id: int, method: str = "RANDOM", existing_conn=None) -> list[dict]:
     """Generate or update team seeds for a tournament."""
-    with _get_connection() as conn:
+    should_close = False
+    if existing_conn:
+        conn = existing_conn
+    else:
+        conn = _get_connection()
+        should_close = True
+
+    try:
         cursor = conn.cursor()
         
         # Check if seeds are locked
@@ -3139,8 +3168,12 @@ def _generate_tournament_seeds_sync(tournament_id: int, method: str = "RANDOM") 
             """, (tournament_id, t_id, idx, method))
             seeds.append({"seed_id": cursor.lastrowid, "tournament_id": tournament_id, "team_id": t_id, "team_name": name, "seed_number": idx, "seeding_method": method, "is_locked": 0})
 
-        conn.commit()
+        if should_close:
+            conn.commit()
         return seeds
+    finally:
+        if should_close:
+            conn.close()
 
 async def generate_tournament_seeds(tournament_id: int, method: str = "RANDOM") -> list[dict]:
     """Asynchronously generate team seeds."""
