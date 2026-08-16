@@ -2174,7 +2174,7 @@ const App = {
             <form onsubmit="App.handleSaveSchedule(event, ${matchId})">
                 <div style="margin-bottom: 1.25rem;">
                     <label style="display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.4rem; text-transform: uppercase;">SCHEDULED TIME (ASIA/DHAKA)</label>
-                    <input type="datetime-local" id="m-schedule-time" class="form-input" value="${dtVal}" style="width: 100%; color-scheme: dark;" required>
+                    <input type="datetime-local" id="m-schedule-time" name="scheduled_at" step="60" class="form-input" value="${dtVal}" style="width: 100%; color-scheme: dark;" required>
                 </div>
                 <div style="margin-bottom: 1.25rem;">
                     <label style="display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.4rem; text-transform: uppercase;">MAP / MODE</label>
