@@ -14,11 +14,34 @@ function toDateTimeLocalValue(value) {
     if (!value) return '';
 
     const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return '';
+    if (!Number.isNaN(date.getTime())) {
+        const pad = n => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
 
-    const pad = n => String(n).padStart(2, '0');
+    try {
+        const match = String(value).match(/(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4}),?\s+(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+        if (match) {
+            const day = parseInt(match[1], 10);
+            const monthStr = match[2];
+            const year = parseInt(match[3], 10);
+            let hours = parseInt(match[4], 10);
+            const minutes = parseInt(match[5], 10);
+            const ampm = match[6].toUpperCase();
+            if (ampm === 'PM' && hours < 12) hours += 12;
+            if (ampm === 'AM' && hours === 12) hours = 0;
 
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+            const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+            const monthIdx = monthNames.indexOf(monthStr.toLowerCase());
+            if (monthIdx !== -1) {
+                const pad = n => String(n).padStart(2, '0');
+                return `${year}-${pad(monthIdx + 1)}-${pad(day)}T${pad(hours)}:${pad(minutes)}`;
+            }
+        }
+    } catch (e) {
+        console.warn('Date parse notice:', e);
+    }
+    return '';
 }
 
 const App = {
@@ -30,6 +53,21 @@ const App = {
     userDiscordId: localStorage.getItem('gen_user_discord_id') || '',
     adminTab: 'overview',
     activeTournamentSlug: '',
+
+    formatStageName(stage, roundNum) {
+        if (!stage) {
+            if (roundNum === 1) return 'Quarter Finals';
+            if (roundNum === 2) return 'Semi Finals';
+            if (roundNum === 3) return 'Grand Final';
+            return `Round ${roundNum || 1}`;
+        }
+        const s = String(stage).trim();
+        const lower = s.toLowerCase();
+        if (lower === 'round 1' || lower === 'quarterfinals' || lower === 'quarter finals') return 'Quarter Finals';
+        if (lower === 'round 2' || lower === 'semifinals' || lower === 'semi finals') return 'Semi Finals';
+        if (lower === 'round 3' || lower === 'finals' || lower === 'final' || lower === 'grand final' || lower === 'grand finals') return 'Grand Final';
+        return s;
+    },
 
     async init() {
         this.bindEvents();
@@ -850,7 +888,7 @@ const App = {
                                     🏆 ${this.escapeHtml(m.tournament_name || 'GEN Esports')}
                                 </div>
                                 <div style="font-size: 0.78rem; color: var(--accent-cyan); margin-top: 0.15rem; font-weight: 600;">
-                                    ${this.escapeHtml(m.stage_name || 'Round 1')}
+                                    ${this.escapeHtml(this.formatStageName(m.stage_name, m.round_number))}
                                 </div>
                                 ${m.scheduled_time ? `<div style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem;">📅 ${this.escapeHtml(m.scheduled_time)}</div>` : ''}
                             </div>
@@ -1790,7 +1828,7 @@ const App = {
                                 <tr>
                                     <td><strong>#M-${m.match_id}</strong></td>
                                     <td>${this.escapeHtml(m.tournament_name || 'N/A')}</td>
-                                    <td><span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(m.stage_name || 'Round')}</span></td>
+                                    <td><span style="color: var(--accent-cyan); font-weight: 700;">${this.escapeHtml(this.formatStageName(m.stage_name, m.round_number))}</span></td>
                                     <td>
                                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                                             <span>🛡️ <strong>${this.escapeHtml(m.team1_name || 'TBD')}</strong> (${m.team1_score ?? 0})</span>
@@ -2130,42 +2168,67 @@ const App = {
     },
 
     showScheduleModal(matchId, currentScheduled = '', currentLobby = '') {
+        const dtVal = toDateTimeLocalValue(currentScheduled);
         this.showModal(`
-            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem;">📅 Schedule Match & Lobby Info</h3>
+            <h3 style="font-family: var(--font-heading); font-size: 1.5rem; margin-bottom: 1rem; color: #fff;">📅 Schedule Match & Lobby Info</h3>
             <form onsubmit="App.handleSaveSchedule(event, ${matchId})">
-                <div class="form-grid" style="margin-bottom: 1rem;">
-                    <div class="form-group">
-                        <label>Scheduled Time (Asia/Dhaka)</label>
-                        <input type="text" id="m-schedule-time" class="form-input" placeholder="e.g. 15 Aug 2026, 8:00 PM (Asia/Dhaka)" value="${currentScheduled}">
+                <div style="margin-bottom: 1.25rem;">
+                    <label style="display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.4rem; text-transform: uppercase;">SCHEDULED TIME (ASIA/DHAKA)</label>
+                    <input type="datetime-local" id="m-schedule-time" class="form-input" value="${dtVal}" style="width: 100%; color-scheme: dark;" required>
+                </div>
+                <div style="margin-bottom: 1.25rem;">
+                    <label style="display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.4rem; text-transform: uppercase;">MAP / MODE</label>
+                    <input type="text" id="m-map" class="form-input" placeholder="e.g. Haven / Ascent / Erangel">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+                    <div>
+                        <label style="display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.4rem; text-transform: uppercase;">LOBBY NAME / ID</label>
+                        <input type="text" id="m-lobby-name" class="form-input" placeholder="e.g. GEN-MATCH-${matchId}" value="${this.escapeHtml(currentLobby)}">
                     </div>
-                    <div class="form-group">
-                        <label>Map / Mode</label>
-                        <input type="text" id="m-map" class="form-input" placeholder="e.g. Haven / Ascent / Erangel">
-                    </div>
-                    <div class="form-group">
-                        <label>Lobby Name / ID</label>
-                        <input type="text" id="m-lobby-name" class="form-input" placeholder="e.g. GEN-MATCH-${matchId}" value="${currentLobby}">
-                    </div>
-                    <div class="form-group">
-                        <label>Lobby Password / Passcode</label>
+                    <div>
+                        <label style="display: block; font-weight: 700; font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 0.4rem; text-transform: uppercase;">LOBBY PASSWORD</label>
                         <input type="text" id="m-lobby-pass" class="form-input" placeholder="e.g. 1234">
                     </div>
                 </div>
-                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem;">💾 Save Schedule & Lobby Info</button>
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem; font-weight: 700;">💾 Save Schedule & Lobby Info</button>
             </form>
         `);
     },
 
     async handleSaveSchedule(e, matchId) {
         e.preventDefault();
-        const scheduled_at = document.getElementById('m-schedule-time').value;
+        const rawTime = document.getElementById('m-schedule-time').value;
         const map_name = document.getElementById('m-map').value;
         const lobby_name = document.getElementById('m-lobby-name').value;
         const lobby_password = document.getElementById('m-lobby-pass').value;
 
+        if (!rawTime) {
+            this.showToast('✕ Please select a valid date and time', 'error');
+            return;
+        }
+
+        let formattedSchedule = rawTime;
+        try {
+            const dateObj = new Date(rawTime);
+            if (!Number.isNaN(dateObj.getTime())) {
+                const day = String(dateObj.getDate()).padStart(2, '0');
+                const months = ['Aug', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                const month = months[dateObj.getMonth() + 1];
+                const year = dateObj.getFullYear();
+                let hours = dateObj.getHours();
+                const minutes = String(dateObj.getMinutes()).padStart(2, '0');
+                const ampm = hours >= 12 ? 'PM' : 'AM';
+                hours = hours % 12;
+                hours = hours ? hours : 12;
+                formattedSchedule = `${day} ${month} ${year}, ${hours}:${minutes} ${ampm} (Asia/Dhaka)`;
+            }
+        } catch (e) {
+            console.warn('Format schedule date notice:', e);
+        }
+
         try {
             await Api.scheduleMatch(this.adminApiKey, matchId, {
-                scheduled_at,
+                scheduled_at: formattedSchedule,
                 map: map_name,
                 lobby_name,
                 lobby_password

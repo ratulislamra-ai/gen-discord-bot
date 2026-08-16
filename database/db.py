@@ -1650,7 +1650,7 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
 
         # Generate Round 1 matches
         round_1_match_ids = []
-        r1_stage = "Final" if num_teams <= 2 else ("Semifinals" if num_teams <= 4 else ("Quarterfinals" if num_teams <= 8 else "Round 1"))
+        r1_stage = "Grand Final" if num_teams <= 2 else ("Semi Finals" if num_teams <= 4 else ("Quarter Finals" if num_teams <= 8 else "Round 1"))
 
         for i in range(0, num_teams, 2):
             team1_id = team_ids[i]
@@ -1679,11 +1679,11 @@ def _generate_tournament_bracket_sync(tournament_id_or_slug: str) -> list[dict]:
             current_round_num += 1
 
             if next_round_match_count == 1:
-                stage_name = "Final"
+                stage_name = "Grand Final"
             elif next_round_match_count == 2:
-                stage_name = "Semifinals"
+                stage_name = "Semi Finals"
             elif next_round_match_count == 4:
-                stage_name = "Quarterfinals"
+                stage_name = "Quarter Finals"
             else:
                 stage_name = f"Round {current_round_num}"
 
@@ -2035,7 +2035,7 @@ def _update_match_result_sync(match_id: int, team1_score: int, team2_score: int,
         if winner_id:
             loser_id = match["team2_id"] if winner_id == match["team1_id"] else match["team1_id"]
             if loser_id:
-                _update_team_elo_after_match_sync(winner_id, loser_id)
+                _update_team_elo_after_match_sync(winner_id, loser_id, existing_conn=conn)
 
         conn.commit()
         cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (match_id,))
@@ -2917,11 +2917,16 @@ def _update_match_schedule_and_lobby_sync(match_id: int, scheduled_at: str | Non
                 lobby_name = COALESCE(?, lobby_name),
                 lobby_code = COALESCE(?, lobby_code),
                 lobby_password = COALESCE(?, lobby_password),
+                lobby_info = CASE 
+                    WHEN ? IS NOT NULL AND ? IS NOT NULL THEN ? || ' (Pass: ' || ? || ')'
+                    WHEN ? IS NOT NULL THEN ?
+                    ELSE COALESCE(lobby_info, lobby_name)
+                END,
                 map = COALESCE(?, map),
                 server_region = COALESCE(?, server_region),
                 status = CASE WHEN status = 'SCHEDULED' AND ? IS NOT NULL THEN 'CHECK_IN_OPEN' ELSE status END
             WHERE match_id = ?;
-        """, (pm_id, scheduled_at, check_in_open, check_in_deadline, lobby_name, lobby_code, lobby_password, map_name, server_region, check_in_open, m_id))
+        """, (pm_id, scheduled_at, check_in_open, check_in_deadline, lobby_name, lobby_code, lobby_password, lobby_name, lobby_password, lobby_name, lobby_password, lobby_name, lobby_name, map_name, server_region, check_in_open, m_id))
 
         conn.commit()
         cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (m_id,))
@@ -3191,12 +3196,19 @@ async def lock_tournament_seeds(tournament_id: int) -> bool:
     """Asynchronously lock seeds."""
     return await asyncio.to_thread(_lock_tournament_seeds_sync, tournament_id)
 
-def _update_team_elo_after_match_sync(winner_team_id: int, loser_team_id: int, k_factor: int = 32) -> bool:
+def _update_team_elo_after_match_sync(winner_team_id: int, loser_team_id: int, k_factor: int = 32, existing_conn=None) -> bool:
     """Idempotently calculate and update team ELO ratings after a verified match."""
     if not winner_team_id or not loser_team_id or winner_team_id == loser_team_id:
         return False
 
-    with _get_connection() as conn:
+    should_close = False
+    if existing_conn:
+        conn = existing_conn
+    else:
+        conn = _get_connection()
+        should_close = True
+
+    try:
         cursor = conn.cursor()
         cursor.execute("INSERT OR IGNORE INTO team_elo (team_id, rating) VALUES (?, 1200);", (winner_team_id,))
         cursor.execute("INSERT OR IGNORE INTO team_elo (team_id, rating) VALUES (?, 1200);", (loser_team_id,))
@@ -3215,8 +3227,12 @@ def _update_team_elo_after_match_sync(winner_team_id: int, loser_team_id: int, k
         cursor.execute("UPDATE team_elo SET rating = ?, matches_rated = matches_rated + 1, wins = wins + 1, last_updated = CURRENT_TIMESTAMP WHERE team_id = ?;", (new_r_w, winner_team_id))
         cursor.execute("UPDATE team_elo SET rating = ?, matches_rated = matches_rated + 1, losses = losses + 1, last_updated = CURRENT_TIMESTAMP WHERE team_id = ?;", (new_r_l, loser_team_id))
 
-        conn.commit()
+        if should_close:
+            conn.commit()
         return True
+    finally:
+        if should_close:
+            conn.close()
 
 async def update_team_elo_after_match(winner_team_id: int, loser_team_id: int, k_factor: int = 32) -> bool:
     """Asynchronously update team ELO ratings."""
@@ -4187,10 +4203,37 @@ def _advance_bracket_and_create_next_match_sync(match_id: int, winner_team_id: i
         
         m_dict = dict(m_row)
         t_id = m_dict["tournament_id"]
+
+        # Check bracket table for exact position mapping
+        cursor.execute("SELECT * FROM brackets WHERE match_id = ?;", (match_id,))
+        b_row = cursor.fetchone()
+
+        if b_row:
+            b_dict = dict(b_row)
+            curr_round = b_dict["round_number"]
+            pos_index = b_dict["position_index"]
+            next_round = curr_round + 1
+            next_pos = pos_index // 2
+
+            cursor.execute("""
+                SELECT match_id FROM brackets 
+                WHERE tournament_id = ? AND round_number = ? AND position_index = ?;
+            """, (t_id, next_round, next_pos))
+            next_b_row = cursor.fetchone()
+
+            if next_b_row:
+                n_id = next_b_row["match_id"]
+                if pos_index % 2 == 0:
+                    cursor.execute("UPDATE matches SET team1_id = ? WHERE match_id = ?;", (winner_team_id, n_id))
+                else:
+                    cursor.execute("UPDATE matches SET team2_id = ? WHERE match_id = ?;", (winner_team_id, n_id))
+                conn.commit()
+                cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (n_id,))
+                return dict(cursor.fetchone())
+
+        # Fallback to round_number lookup if brackets entry is not present
         curr_round = m_dict.get("round_number", 1)
         next_round = curr_round + 1
-
-        # Check if there is an open next-round match waiting for winner
         cursor.execute("""
             SELECT * FROM matches 
             WHERE tournament_id = ? AND round_number = ? AND (team1_id IS NULL OR team2_id IS NULL)
@@ -4209,7 +4252,6 @@ def _advance_bracket_and_create_next_match_sync(match_id: int, winner_team_id: i
             cursor.execute("SELECT * FROM matches WHERE match_id = ?;", (n_id,))
             return dict(cursor.fetchone())
         else:
-            # Create next round match shell
             cursor.execute("SELECT COUNT(*) FROM matches WHERE tournament_id = ?;", (t_id,))
             match_count = cursor.fetchone()[0] + 1
             pub_m_id = f"GEN-M-{match_count:06d}"

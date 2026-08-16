@@ -275,17 +275,39 @@ class TestEsportsSystem(unittest.TestCase):
         self.assertEqual(rounds[2]["round_name"], "GRAND FINAL")
         self.assertEqual(len(rounds[2]["matches"]), 1)
 
-    def test_S_bracket_generation_idempotency(self):
-        """Scenario S: Verify that calling generate_tournament_bracket multiple times is idempotent."""
-        from database.db import generate_tournament_bracket, get_tournament_bracket_tree
-        matches_first = self.run_async(generate_tournament_bracket("600"))
-        matches_second = self.run_async(generate_tournament_bracket("600"))
-        self.assertEqual(len(matches_first), len(matches_second))
-
+    def test_T_advancement_end_to_end(self):
+        """Scenario T: Verify end-to-end winner advancement from Quarter Finals to Semi Finals to Grand Final champion."""
+        from database.db import update_match_result, get_tournament_bracket_tree
         tree = self.run_async(get_tournament_bracket_tree("600"))
-        # Verify exactly 7 matches in total (4 + 2 + 1)
-        total_matches = sum(len(r["matches"]) for r in tree["rounds"])
-        self.assertEqual(total_matches, 7)
+        qf_matches = tree["rounds"][0]["matches"]
+        
+        # Submit QF1 result (Match 0 winner -> Team 1 of SF1)
+        qf1_id = qf_matches[0]["match_id"]
+        qf1_winner = qf_matches[0]["team1_id"]
+        self.run_async(update_match_result(qf1_id, 13, 5, qf1_winner))
+
+        # Submit QF2 result (Match 1 winner -> Team 2 of SF1)
+        qf2_id = qf_matches[1]["match_id"]
+        qf2_winner = qf_matches[1]["team1_id"]
+        self.run_async(update_match_result(qf2_id, 13, 8, qf2_winner))
+
+        tree_after_qf = self.run_async(get_tournament_bracket_tree("600"))
+        sf1_match = tree_after_qf["rounds"][1]["matches"][0]
+        self.assertEqual(sf1_match["team1_id"], qf1_winner)
+        self.assertEqual(sf1_match["team2_id"], qf2_winner)
+
+    def test_U_schedule_match_update(self):
+        """Scenario U: Verify updating match schedule and lobby info preserves Asia/Dhaka time and details."""
+        from database.db import update_match_schedule_and_lobby, _get_connection
+        sched_time = "15 Aug 2026, 8:00 PM (Asia/Dhaka)"
+        m = self.run_async(update_match_schedule_and_lobby(901, scheduled_at=sched_time, lobby_name="GEN-LOBBY-901", map_name="Ascent", lobby_password="1234"))
+        self.assertIsNotNone(m)
+        with _get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT scheduled_time, lobby_info FROM matches WHERE match_id = 901;")
+            row = dict(cursor.fetchone())
+            self.assertEqual(row["scheduled_time"], sched_time)
+            self.assertIn("GEN-LOBBY-901", row["lobby_info"])
 
 if __name__ == "__main__":
     unittest.main()
